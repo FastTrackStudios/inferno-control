@@ -1,0 +1,54 @@
+use std::net::IpAddr;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Device {
+    pub name: String,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub addresses: Vec<IpAddr>,
+    pub services: Vec<DanteService>,
+    pub tx_channels: Vec<Channel>,
+    pub rx_channels: Vec<Channel>,
+    pub subscriptions: Vec<Subscription>,
+    pub sample_rate: Option<u32>,
+    pub latency_ns: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DanteService {
+    pub kind: ServiceKind,
+    pub port: u16,
+    pub host: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServiceKind {
+    Arc,
+    Cmc,
+    Dbc,
+    ChanArc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Channel {
+    pub number: u16,
+    pub name: String,
+    pub direction: Direction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direction {
+    Tx,
+    Rx,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subscription {
+    pub rx_channel: String,
+    pub rx_device: String,
+    pub tx_channel: Option<String>,
+    pub tx_device: Option<String>,
+    pub status: Option<String>,
+}

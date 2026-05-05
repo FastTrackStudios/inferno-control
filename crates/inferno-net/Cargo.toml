@@ -1,0 +1,21 @@
+[package]
+name = "inferno-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Dante/Inferno network audio control protocol library"
+
+[dependencies]
+tokio.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+mdns-sd.workspace = true
+bytes.workspace = true
+hex.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+rand.workspace = true

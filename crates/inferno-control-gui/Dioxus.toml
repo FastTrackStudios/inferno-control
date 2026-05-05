@@ -1,0 +1,6 @@
+[application]
+name = "inferno-control-gui"
+default_platform = "desktop"
+
+[desktop]
+title = "Inferno Control"

@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@source "./src/**/*.{rs,html,css}";
+@source "../../../../FastTrackStudio/fts-ui/crates/fts-ui/src/**/*.rs";
+
+@layer base {
+    html { color-scheme: dark; }
+    body {
+        @apply bg-neutral-950 text-neutral-100 m-0 p-0 font-sans;
+    }
+}

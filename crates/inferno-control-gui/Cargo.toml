@@ -1,0 +1,25 @@
+[package]
+name = "inferno-control-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Dioxus GUI for inferno-control — Dante Controller-style routing matrix"
+
+[[bin]]
+name = "inferno-control-gui"
+path = "src/main.rs"
+
+[dependencies]
+inferno-net.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dioxus = { workspace = true, features = ["desktop"] }
+dioxus-primitives.workspace = true
+lucide-dioxus.workspace = true
+fts-ui.workspace = true
+clsx.workspace = true
+tw_merge.workspace = true

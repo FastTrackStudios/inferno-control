@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/inferno-net",
+    "crates/inferno-control",
+    "crates/inferno-control-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/FastTrackStudios/inferno-control"
+authors = ["Cody Wright"]
+
+[workspace.dependencies]
+inferno-net = { path = "crates/inferno-net" }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "2"
+tracing = { version = "0.1", features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+mdns-sd = "0.13"
+bytes = "1"
+hex = "0.4"
+futures = "0.3"
+async-trait = "0.1"
+rand = "0.9"
+
+# Dioxus + design system. Mirrors the fts-ui workspace deps so we link the
+# same Dioxus toolchain. fts-ui is consumed as a path dep against a sibling
+# checkout for fast iteration; swap to a git rev once the API stabilises.
+dioxus = { version = "0.7.6", default-features = false, features = ["lib"] }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components", package = "dioxus-primitives", rev = "733874bb35ab8a360813d841dde8353997246f09", default-features = false }
+lucide-dioxus = { git = "https://github.com/Leaf-Computer/lucide.git", rev = "e3e509d5855324e893aef838747cccb2d115dc15", features = ["all-icons"] }
+clsx = "0.1.1"
+tw_merge = "0.1.21"
+fts-ui = { path = "../../FastTrackStudio/fts-ui/crates/fts-ui" }

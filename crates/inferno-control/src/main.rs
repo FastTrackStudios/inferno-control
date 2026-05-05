@@ -1,0 +1,423 @@
+use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
+use clap::{Parser, Subcommand, ValueEnum};
+use tracing_subscriber::EnvFilter;
+
+use inferno_net::protocol::commands::{ChannelDirection, GainDirection};
+use inferno_net::protocol::{DanteClient, DEVICE_ARC_PORT};
+
+#[derive(Parser, Debug)]
+#[command(name = "inferno-control", version, about = "Control Dante/Inferno network audio devices")]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+
+    /// Discovery / request timeout in seconds
+    #[arg(long, default_value_t = 2)]
+    timeout: u64,
+}
+
+#[derive(Subcommand, Debug)]
+enum Cmd {
+    Device {
+        #[command(subcommand)]
+        op: DeviceOp,
+    },
+    Channel {
+        #[command(subcommand)]
+        op: ChannelOp,
+    },
+    Subscription {
+        #[command(subcommand)]
+        op: SubscriptionOp,
+    },
+    Config {
+        #[command(subcommand)]
+        op: ConfigOp,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum DeviceOp {
+    /// Discover devices on the network
+    List {
+        #[arg(long)]
+        json: bool,
+        /// Query each device for model + channel counts + sample rate
+        #[arg(long)]
+        details: bool,
+    },
+    /// Show detailed info for a single device
+    Info { ip: String },
+    /// Rename device
+    SetName { ip: String, name: String },
+    /// Reset device name to factory default
+    ResetName { ip: String },
+    /// Reboot device
+    Reboot { ip: String },
+    /// Identify (blink) device
+    Identify { ip: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum ChannelOp {
+    /// List TX + RX channels
+    List {
+        ip: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set channel name
+    SetName {
+        ip: String,
+        #[arg(value_enum)]
+        direction: Direction,
+        channel: u8,
+        name: String,
+    },
+    /// Reset channel name to factory default
+    ResetName {
+        ip: String,
+        #[arg(value_enum)]
+        direction: Direction,
+        channel: u8,
+    },
+    /// Set channel gain
+    SetGain {
+        ip: String,
+        #[arg(value_enum)]
+        direction: GainDir,
+        channel: u8,
+        gain: u8,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SubscriptionOp {
+    /// List active RX subscriptions
+    List {
+        ip: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a subscription: rx_channel <- tx_channel@tx_device
+    Add {
+        ip: String,
+        rx_channel: u16,
+        tx_channel: String,
+        tx_device: String,
+    },
+    /// Remove subscription on rx_channel
+    Remove { ip: String, rx_channel: u32 },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigOp {
+    /// Set sample rate (Hz, e.g. 48000, 96000)
+    SetSampleRate { ip: String, hz: u32 },
+    /// Set encoding (e.g. 16, 24, 32)
+    SetEncoding { ip: String, bits: u8 },
+    /// Set device latency (microseconds)
+    SetLatency { ip: String, us: u32 },
+    /// Enable/disable AES67 mode
+    Aes67 { ip: String, enabled: bool },
+    /// Set preferred leader flag
+    PreferredLeader {
+        ip: String,
+        enabled: bool,
+        #[arg(long, default_value_t = 0)]
+        clock_source: u16,
+    },
+    /// Switch interface to DHCP
+    Dhcp { ip: String },
+    /// Switch interface to static IP
+    Static {
+        ip: String,
+        new_ip: IpAddr,
+        netmask: IpAddr,
+        dns: IpAddr,
+        gateway: IpAddr,
+    },
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum Direction {
+    Tx,
+    Rx,
+}
+
+impl From<Direction> for ChannelDirection {
+    fn from(d: Direction) -> Self {
+        match d {
+            Direction::Tx => ChannelDirection::Tx,
+            Direction::Rx => ChannelDirection::Rx,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum GainDir {
+    Input,
+    Output,
+}
+
+impl From<GainDir> for GainDirection {
+    fn from(d: GainDir) -> Self {
+        match d {
+            GainDir::Input => GainDirection::Input,
+            GainDir::Output => GainDirection::Output,
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    let cli = Cli::parse();
+    let timeout = Duration::from_secs(cli.timeout);
+
+    match cli.cmd {
+        Cmd::Device { op } => match op {
+            DeviceOp::List { json, details } => device_list(timeout, json, details).await?,
+            DeviceOp::Info { ip } => device_info(ip, timeout).await?,
+            DeviceOp::SetName { ip, name } => {
+                client(&ip, timeout)?.set_device_name(&name).await?;
+                println!("ok");
+            }
+            DeviceOp::ResetName { ip } => {
+                client(&ip, timeout)?.reset_device_name().await?;
+                println!("ok");
+            }
+            DeviceOp::Reboot { ip } => {
+                client(&ip, timeout)?.reboot(None).await?;
+                println!("reboot sent (no response expected)");
+            }
+            DeviceOp::Identify { ip } => {
+                client(&ip, timeout)?.identify().await?;
+                println!("identify sent (no response expected)");
+            }
+        },
+        Cmd::Channel { op } => match op {
+            ChannelOp::List { ip, json } => channel_list(ip, timeout, json).await?,
+            ChannelOp::SetName { ip, direction, channel, name } => {
+                client(&ip, timeout)?
+                    .set_channel_name(direction.into(), channel, &name)
+                    .await?;
+                println!("ok");
+            }
+            ChannelOp::ResetName { ip, direction, channel } => {
+                client(&ip, timeout)?
+                    .reset_channel_name(direction.into(), channel)
+                    .await?;
+                println!("ok");
+            }
+            ChannelOp::SetGain { ip, direction, channel, gain } => {
+                client(&ip, timeout)?
+                    .set_gain_level(direction.into(), channel, gain)
+                    .await?;
+                println!("gain command sent (no response expected)");
+            }
+        },
+        Cmd::Subscription { op } => match op {
+            SubscriptionOp::List { ip, json } => subscription_list(ip, timeout, json).await?,
+            SubscriptionOp::Add { ip, rx_channel, tx_channel, tx_device } => {
+                client(&ip, timeout)?
+                    .add_subscription(rx_channel, &tx_channel, &tx_device)
+                    .await?;
+                println!("ok");
+            }
+            SubscriptionOp::Remove { ip, rx_channel } => {
+                client(&ip, timeout)?.remove_subscription(rx_channel).await?;
+                println!("ok");
+            }
+        },
+        Cmd::Config { op } => match op {
+            ConfigOp::SetSampleRate { ip, hz } => {
+                client(&ip, timeout)?.set_sample_rate(hz).await?;
+                println!("sample-rate command sent");
+            }
+            ConfigOp::SetEncoding { ip, bits } => {
+                client(&ip, timeout)?.set_encoding(bits).await?;
+                println!("encoding command sent");
+            }
+            ConfigOp::SetLatency { ip, us } => {
+                client(&ip, timeout)?.set_latency_us(us).await?;
+                println!("ok");
+            }
+            ConfigOp::Aes67 { ip, enabled } => {
+                client(&ip, timeout)?.enable_aes67(enabled, None).await?;
+                println!("aes67 command sent");
+            }
+            ConfigOp::PreferredLeader { ip, enabled, clock_source } => {
+                client(&ip, timeout)?
+                    .set_preferred_leader(enabled, clock_source, None)
+                    .await?;
+                println!("preferred-leader command sent");
+            }
+            ConfigOp::Dhcp { ip } => {
+                client(&ip, timeout)?.set_interface_dhcp(None).await?;
+                println!("dhcp command sent");
+            }
+            ConfigOp::Static { ip, new_ip, netmask, dns, gateway } => {
+                client(&ip, timeout)?
+                    .set_interface_static(new_ip, netmask, dns, gateway, None)
+                    .await?;
+                println!("static-ip command sent");
+            }
+        },
+    }
+    Ok(())
+}
+
+fn arc_addr(ip: &str) -> Result<SocketAddr> {
+    format!("{}:{}", ip, DEVICE_ARC_PORT)
+        .parse()
+        .map_err(|e| anyhow!("invalid IP {ip}: {e}"))
+}
+
+fn client(ip: &str, timeout: Duration) -> Result<DanteClient> {
+    Ok(DanteClient::new(arc_addr(ip)?, timeout))
+}
+
+async fn device_list(timeout: Duration, json: bool, details: bool) -> Result<()> {
+    let devices = inferno_net::discovery::browse(timeout).await?;
+    let mut list: Vec<_> = devices.into_values().collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if !details {
+        if json {
+            println!("{}", serde_json::to_string_pretty(&list)?);
+        } else {
+            for d in &list {
+                let addrs = d
+                    .addresses
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("{:<32} {}", d.name, addrs);
+            }
+            println!("\n{} device(s)", list.len());
+        }
+        return Ok(());
+    }
+
+    let mut rows = Vec::new();
+    for d in &list {
+        let Some(ip) = d.addresses.iter().find(|a| a.is_ipv4()).copied() else {
+            continue;
+        };
+        let c = DanteClient::new(SocketAddr::new(ip, DEVICE_ARC_PORT), timeout);
+        let info = c.device_info().await.ok();
+        let count = c.channel_count().await.ok();
+        let settings = c.device_settings().await.ok();
+        rows.push(serde_json::json!({
+            "name": d.name,
+            "ip": ip.to_string(),
+            "model": info.as_ref().map(|i| &i.model_name),
+            "tx_count": count.map(|c| c.tx_count),
+            "rx_count": count.map(|c| c.rx_count),
+            "sample_rate": settings.as_ref().and_then(|s| s.sample_rate),
+            "latency_us": settings.as_ref().and_then(|s| s.latency_us),
+        }));
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        println!(
+            "{:<28} {:<16} {:<24} {:>4}/{:<4} {:>6} {:>8}",
+            "NAME", "IP", "MODEL", "TX", "RX", "SR", "LAT_US"
+        );
+        for r in &rows {
+            println!(
+                "{:<28} {:<16} {:<24} {:>4}/{:<4} {:>6} {:>8}",
+                r["name"].as_str().unwrap_or(""),
+                r["ip"].as_str().unwrap_or(""),
+                r["model"].as_str().unwrap_or("-"),
+                r["tx_count"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                r["rx_count"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                r["sample_rate"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                r["latency_us"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn device_info(ip: String, timeout: Duration) -> Result<()> {
+    let c = client(&ip, timeout)?;
+    let name = c.device_name().await?;
+    let info = c.device_info().await?;
+    let count = c.channel_count().await?;
+    let settings = c.device_settings().await?;
+    let payload = serde_json::json!({
+        "ip": ip,
+        "name": name,
+        "info": info,
+        "channel_count": count,
+        "settings": settings,
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+async fn channel_list(ip: String, timeout: Duration, json: bool) -> Result<()> {
+    let c = client(&ip, timeout)?;
+    let tx = c.all_tx_channels().await?;
+    let rx = c.all_rx_channels().await?;
+
+    if json {
+        let payload = serde_json::json!({ "tx": tx, "rx": rx });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    println!("TX channels ({}):", tx.len());
+    for c in &tx {
+        let sr = c.sample_rate.map(|s| s.to_string()).unwrap_or_else(|| "-".into());
+        println!("  {:>3}  {:<24} sr={}", c.number, c.name, sr);
+    }
+    println!("\nRX channels ({}):", rx.len());
+    for c in &rx {
+        let sub = match (&c.tx_device_name, &c.tx_channel_name) {
+            (Some(d), Some(t)) => format!("{}@{}", t, d),
+            _ => "-".into(),
+        };
+        println!(
+            "  {:>3}  {:<24}  sub={}  status={:#06x}",
+            c.number, c.name, sub, c.subscription_status
+        );
+    }
+    Ok(())
+}
+
+async fn subscription_list(ip: String, timeout: Duration, json: bool) -> Result<()> {
+    let c = client(&ip, timeout)?;
+    let rx = c.all_rx_channels().await?;
+    let subs: Vec<_> = rx
+        .into_iter()
+        .filter(|c| c.tx_device_name.is_some() || c.tx_channel_name.is_some())
+        .collect();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&subs)?);
+    } else {
+        for c in &subs {
+            let tx_dev = c.tx_device_name.as_deref().unwrap_or("-");
+            let tx_ch = c.tx_channel_name.as_deref().unwrap_or("-");
+            println!(
+                "{:<24} <- {}@{}   status={:#06x}",
+                c.name, tx_ch, tx_dev, c.subscription_status
+            );
+        }
+    }
+    Ok(())
+}
