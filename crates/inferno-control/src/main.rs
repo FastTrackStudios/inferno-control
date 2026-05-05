@@ -1,7 +1,9 @@
+use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 
@@ -111,6 +113,17 @@ enum SubscriptionOp {
     },
     /// Remove subscription on rx_channel
     Remove { ip: String, rx_channel: u32 },
+    /// Bulk-add subscriptions from CSV (rx_channel,tx_channel,tx_device per line).
+    /// Reads from FILE, or stdin when FILE is omitted or `-`. Lines beginning
+    /// with `#` and blank lines are skipped. Records are batched 16 per packet.
+    BulkAdd {
+        ip: String,
+        /// CSV file; omit or pass `-` to read from stdin
+        file: Option<PathBuf>,
+        /// Continue after individual batch failures
+        #[arg(long)]
+        keep_going: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -236,6 +249,9 @@ async fn main() -> Result<()> {
             SubscriptionOp::Remove { ip, rx_channel } => {
                 client(&ip, timeout)?.remove_subscription(rx_channel).await?;
                 println!("ok");
+            }
+            SubscriptionOp::BulkAdd { ip, file, keep_going } => {
+                subscription_bulk_add(ip, file, keep_going, timeout).await?;
             }
         },
         Cmd::Config { op } => match op {
@@ -397,6 +413,129 @@ async fn channel_list(ip: String, timeout: Duration, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+struct BulkRow {
+    line_no: usize,
+    rx_channel: u16,
+    tx_channel: String,
+    tx_device: String,
+}
+
+fn parse_bulk_rows<R: BufRead>(reader: R) -> Result<Vec<BulkRow>> {
+    let mut out = Vec::new();
+    for (i, line) in reader.lines().enumerate() {
+        let line_no = i + 1;
+        let line = line.with_context(|| format!("read line {line_no}"))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.splitn(3, ',').map(str::trim).collect();
+        if parts.len() != 3 {
+            return Err(anyhow!(
+                "line {line_no}: expected `rx_channel,tx_channel,tx_device`, got `{trimmed}`"
+            ));
+        }
+        let rx_channel: u16 = parts[0]
+            .parse()
+            .with_context(|| format!("line {line_no}: invalid rx_channel `{}`", parts[0]))?;
+        if parts[1].is_empty() || parts[2].is_empty() {
+            return Err(anyhow!("line {line_no}: tx_channel and tx_device cannot be empty"));
+        }
+        out.push(BulkRow {
+            line_no,
+            rx_channel,
+            tx_channel: parts[1].to_string(),
+            tx_device: parts[2].to_string(),
+        });
+    }
+    Ok(out)
+}
+
+async fn subscription_bulk_add(
+    ip: String,
+    file: Option<PathBuf>,
+    keep_going: bool,
+    timeout: Duration,
+) -> Result<()> {
+    let rows = match file.as_deref() {
+        None => parse_bulk_rows(BufReader::new(std::io::stdin().lock()))?,
+        Some(p) if p.as_os_str() == "-" => {
+            parse_bulk_rows(BufReader::new(std::io::stdin().lock()))?
+        }
+        Some(p) => {
+            let f = std::fs::File::open(p)
+                .with_context(|| format!("open {}", p.display()))?;
+            parse_bulk_rows(BufReader::new(f))?
+        }
+    };
+
+    if rows.is_empty() {
+        println!("no subscription rows to add");
+        return Ok(());
+    }
+
+    let c = client(&ip, timeout)?;
+    let mut sent = 0usize;
+    let mut failed = 0usize;
+    for chunk in rows.chunks(16) {
+        let pairs: Vec<(u16, &str, &str)> = chunk
+            .iter()
+            .map(|r| (r.rx_channel, r.tx_channel.as_str(), r.tx_device.as_str()))
+            .collect();
+        let first = chunk.first().map(|r| r.line_no).unwrap_or(0);
+        let last = chunk.last().map(|r| r.line_no).unwrap_or(0);
+        match c.add_subscriptions_bulk(&pairs).await {
+            Ok(()) => {
+                sent += chunk.len();
+                println!("ok: lines {first}-{last} ({} subs)", chunk.len());
+            }
+            Err(e) => {
+                failed += chunk.len();
+                eprintln!("error: lines {first}-{last}: {e}");
+                if !keep_going {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+    println!("{sent} added, {failed} failed");
+    if failed > 0 && !keep_going {
+        return Err(anyhow!("{failed} subscription(s) failed"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_bulk_rows;
+
+    #[test]
+    fn parses_csv_skipping_comments_and_blanks() {
+        let csv = "# header\n\n1, out-1 , AVIO-USB\n2,out-2,AVIO-USB\n";
+        let rows = parse_bulk_rows(csv.as_bytes()).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].rx_channel, 1);
+        assert_eq!(rows[0].tx_channel, "out-1");
+        assert_eq!(rows[0].tx_device, "AVIO-USB");
+        assert_eq!(rows[1].rx_channel, 2);
+    }
+
+    #[test]
+    fn rejects_bad_rx_channel() {
+        assert!(parse_bulk_rows("foo,bar,baz\n".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn rejects_short_row() {
+        assert!(parse_bulk_rows("1,only-two\n".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_field() {
+        assert!(parse_bulk_rows("1,,AVIO\n".as_bytes()).is_err());
+    }
 }
 
 async fn subscription_list(ip: String, timeout: Duration, json: bool) -> Result<()> {

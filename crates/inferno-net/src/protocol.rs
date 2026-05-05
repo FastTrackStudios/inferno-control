@@ -13,4 +13,7 @@ pub mod parser;
 pub use client::DanteClient;
 pub use consts::*;
 pub use packet::{DantePacket, DanteResponse};
-pub use parser::{ChannelCount, DeviceInfo, DeviceSettings, RxChannel, TxChannel};
+pub use parser::{
+    parse_channel_count, parse_device_info, parse_device_settings, parse_rx_channels,
+    parse_tx_channels, ChannelCount, DeviceInfo, DeviceSettings, RxChannel, TxChannel,
+};
