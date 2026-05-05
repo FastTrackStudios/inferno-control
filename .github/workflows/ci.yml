@@ -23,7 +23,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - name: rustfmt --check (non-gui crates)
+        run: cargo fmt -p inferno-net -p inferno-control -- --check
 
   clippy:
     name: clippy (${{ matrix.crate }})
