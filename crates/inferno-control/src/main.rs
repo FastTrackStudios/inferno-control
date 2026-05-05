@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -48,6 +48,17 @@ enum Cmd {
     Config {
         #[command(subcommand)]
         op: ConfigOp,
+    },
+    /// Probe a device and dump everything we know about it (name, info,
+    /// channel counts, settings, channels, subscriptions, per-query latency).
+    /// Useful when filing bug reports against odd devices.
+    Diagnose {
+        ip: String,
+        /// ARC port override (defaults to 4440 / mDNS-advertised)
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -298,6 +309,7 @@ async fn main() -> Result<()> {
                 subscription_bulk_add(ip, file, keep_going, timeout).await?;
             }
         },
+        Cmd::Diagnose { ip, port, json } => diagnose(ip, port, timeout, json, &aliases).await?,
         Cmd::Config { op } => match op {
             ConfigOp::SetSampleRate { ip, hz } => {
                 client(&ip, timeout)?.set_sample_rate(hz).await?;
@@ -631,6 +643,154 @@ async fn subscription_list(ip: String, timeout: Duration, json: bool) -> Result<
                 "{:<24} <- {}@{}   status={:#06x}",
                 c.name, tx_ch, tx_dev, c.subscription_status
             );
+        }
+    }
+    Ok(())
+}
+
+async fn diagnose(
+    ip: String,
+    port: Option<u16>,
+    timeout: Duration,
+    json: bool,
+    aliases: &Aliases,
+) -> Result<()> {
+    let addr: SocketAddr = match port {
+        Some(p) => format!("{ip}:{p}").parse()?,
+        None => arc_addr(&ip)?,
+    };
+    let c = DanteClient::new(addr, timeout);
+
+    let mut timings = serde_json::Map::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    macro_rules! timed {
+        ($label:expr, $fut:expr) => {{
+            let t = Instant::now();
+            let r = $fut.await;
+            timings.insert(
+                $label.to_string(),
+                serde_json::json!(t.elapsed().as_micros() as u64),
+            );
+            r
+        }};
+    }
+
+    let name = timed!("device_name", c.device_name()).ok();
+    let info = timed!("device_info", c.device_info()).ok();
+    let count = timed!("channel_count", c.channel_count()).ok();
+    let settings = timed!("device_settings", c.device_settings()).ok();
+    let tx = timed!("all_tx_channels", c.all_tx_channels()).unwrap_or_default();
+    let rx = timed!("all_rx_channels", c.all_rx_channels()).unwrap_or_default();
+
+    if name.is_none() {
+        warnings.push("device_name query failed".into());
+    }
+    if info.is_none() {
+        warnings.push("device_info query failed".into());
+    }
+    if count.is_none() {
+        warnings.push("channel_count query failed".into());
+    }
+    if settings.as_ref().and_then(|s| s.sample_rate).is_none() {
+        warnings.push("no sample_rate reported".into());
+    }
+    let unhealthy_subs: Vec<_> = rx
+        .iter()
+        .filter(|c| {
+            (c.tx_device_name.is_some() || c.tx_channel_name.is_some())
+                && c.subscription_status != 0x0001
+        })
+        .map(|c| {
+            format!(
+                "rx[{}] {} <- {}@{} status={:#06x}",
+                c.number,
+                c.name,
+                c.tx_channel_name.as_deref().unwrap_or("-"),
+                c.tx_device_name.as_deref().unwrap_or("-"),
+                c.subscription_status
+            )
+        })
+        .collect();
+    if !unhealthy_subs.is_empty() {
+        warnings.push(format!(
+            "{} subscription(s) not in healthy state (0x0001)",
+            unhealthy_subs.len()
+        ));
+    }
+
+    let alias = match (&name, &info) {
+        (Some(n), Some(i)) => aliases.lookup(&[n, &i.model_name, &i.model_code]),
+        (Some(n), None) => aliases.lookup(&[n]),
+        _ => None,
+    };
+
+    let payload = serde_json::json!({
+        "ip": ip,
+        "addr": addr.to_string(),
+        "name": name,
+        "alias": alias,
+        "info": info,
+        "channel_count": count,
+        "settings": settings,
+        "tx_channels": tx,
+        "rx_channels": rx,
+        "timings_us": timings,
+        "warnings": warnings,
+        "unhealthy_subscriptions": unhealthy_subs,
+    });
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    println!("address       : {addr}");
+    if let Some(n) = &name {
+        println!("device name   : {n}");
+    }
+    if let Some(a) = &alias {
+        println!("alias         : {a}");
+    }
+    if let Some(i) = &info {
+        println!(
+            "model         : {} ({}) port={}",
+            i.model_name, i.model_code, i.port
+        );
+    }
+    if let Some(c) = &count {
+        println!(
+            "channels      : tx={}/{} rx={}/{} max_flows tx={} rx={}",
+            c.tx_active, c.tx_count, c.rx_active, c.rx_count, c.max_tx_flows, c.max_rx_flows
+        );
+    }
+    if let Some(s) = &settings {
+        println!(
+            "settings      : sr={:?} latency_us={:?} (min={:?}, max={:?})",
+            s.sample_rate, s.latency_us, s.min_latency_us, s.max_latency_us
+        );
+    }
+    println!("tx channels   : {}", tx.len());
+    println!("rx channels   : {}", rx.len());
+    let active_subs = rx
+        .iter()
+        .filter(|c| c.tx_device_name.is_some() || c.tx_channel_name.is_some())
+        .count();
+    println!("subscriptions : {active_subs} active");
+    println!("\nquery timings (us):");
+    for (k, v) in &timings {
+        println!("  {:<16} {}", k, v.as_u64().unwrap_or(0));
+    }
+    if !warnings.is_empty() {
+        println!("\nwarnings:");
+        for w in &warnings {
+            println!("  - {w}");
+        }
+    }
+    if !unhealthy_subs.is_empty() {
+        println!("\nunhealthy subscriptions:");
+        for s in &unhealthy_subs {
+            println!("  - {s}");
         }
     }
     Ok(())
