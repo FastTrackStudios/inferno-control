@@ -33,16 +33,13 @@ pub async fn browse(duration: Duration) -> Result<HashMap<String, Device>> {
     let daemon = ServiceDaemon::new().map_err(|e| Error::Mdns(e.to_string()))?;
     let mut devices: HashMap<String, Device> = HashMap::new();
 
-    // Skip `_netaudio-chan` for device enumeration: it publishes one record
-    // per channel, which would balloon the device list. Devices show up via
-    // arc/cmc/dbc; channel records are queried directly via the ARC port.
+    // Browse all four services. Chan records publish one entry per channel
+    // (`<chan>@<device>._netaudio-chan._udp.local.`); we use them to pre-
+    // populate `Device::mdns_channel_names` without touching ARC.
     let mut receivers = Vec::new();
     for (svc, kind) in ALL_SERVICES {
-        if *kind == ServiceKind::ChanArc {
-            continue;
-        }
         let rx = daemon.browse(svc).map_err(|e| Error::Mdns(e.to_string()))?;
-        receivers.push((*svc, rx));
+        receivers.push((*svc, *kind, rx));
     }
 
     let deadline = tokio::time::Instant::now() + duration;
@@ -50,19 +47,24 @@ pub async fn browse(duration: Duration) -> Result<HashMap<String, Device>> {
         if tokio::time::Instant::now() >= deadline {
             break;
         }
-        for (svc, rx) in &receivers {
+        for (_svc, kind, rx) in &receivers {
             while let Ok(event) = rx.try_recv() {
                 if let ServiceEvent::ServiceResolved(info) = event {
-                    let kind = ALL_SERVICES
-                        .iter()
-                        .find(|(s, _)| s == svc)
-                        .map(|(_, k)| *k)
-                        .unwrap_or(ServiceKind::Cmc);
+                    let kind = *kind;
                     let fullname = info.get_fullname().to_string();
-                    let device_name = fullname
+                    // First label: either `<device>` (arc/cmc/dbc) or
+                    // `<chan>@<device>` (chan-arc). Split off the parent
+                    // device name in both cases.
+                    let first_label = fullname
                         .split_once('.')
                         .map(|(n, _)| n.to_string())
                         .unwrap_or_else(|| fullname.clone());
+                    let (device_name, chan_name) = match (kind, first_label.split_once('@')) {
+                        (ServiceKind::ChanArc, Some((chan, dev))) => {
+                            (dev.to_string(), Some(chan.to_string()))
+                        }
+                        _ => (first_label, None),
+                    };
 
                     let entry = devices
                         .entry(device_name.clone())
@@ -77,6 +79,7 @@ pub async fn browse(duration: Duration) -> Result<HashMap<String, Device>> {
                             subscriptions: Vec::new(),
                             sample_rate: None,
                             latency_ns: None,
+                            mdns_channel_names: Vec::new(),
                         });
 
                     for ip in info.get_addresses() {
@@ -85,11 +88,17 @@ pub async fn browse(duration: Duration) -> Result<HashMap<String, Device>> {
                             entry.addresses.push(ip);
                         }
                     }
-                    entry.services.push(DanteService {
-                        kind,
-                        port: info.get_port(),
-                        host: info.get_hostname().to_string(),
-                    });
+                    if let Some(chan) = chan_name {
+                        if !entry.mdns_channel_names.contains(&chan) {
+                            entry.mdns_channel_names.push(chan);
+                        }
+                    } else {
+                        entry.services.push(DanteService {
+                            kind,
+                            port: info.get_port(),
+                            host: info.get_hostname().to_string(),
+                        });
+                    }
                     debug!(device = %device_name, ?kind, "resolved");
                 }
             }

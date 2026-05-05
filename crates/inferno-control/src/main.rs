@@ -387,6 +387,8 @@ async fn device_list(
                         "name": d.name,
                         "alias": aliases.lookup(&[&d.name]),
                         "addresses": d.addresses.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                        "mdns_channel_count": d.mdns_channel_names.len(),
+                        "mdns_channel_names": d.mdns_channel_names,
                     })
                 })
                 .collect();
@@ -403,7 +405,12 @@ async fn device_list(
                     .lookup(&[&d.name])
                     .map(|a| format!("  [{a}]"))
                     .unwrap_or_default();
-                println!("{:<32} {}{}", d.name, addrs, alias);
+                let chan_hint = if d.mdns_channel_names.is_empty() {
+                    String::new()
+                } else {
+                    format!("  ({} chan)", d.mdns_channel_names.len())
+                };
+                println!("{:<32} {}{}{}", d.name, addrs, alias, chan_hint);
             }
             println!("\n{} device(s)", list.len());
         }

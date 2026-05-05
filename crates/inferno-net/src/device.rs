@@ -14,6 +14,12 @@ pub struct Device {
     pub subscriptions: Vec<Subscription>,
     pub sample_rate: Option<u32>,
     pub latency_ns: Option<u32>,
+    /// Channel names harvested from `_netaudio-chan._udp` mDNS records.
+    /// Populated before ARC queries complete; the GUI can render labels
+    /// without waiting on a round-trip. Names are in advertisement order;
+    /// duplicates are de-duped.
+    #[serde(default)]
+    pub mdns_channel_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
