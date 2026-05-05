@@ -4,7 +4,7 @@
 //!   - top header row    : transmitter (TX) channels grouped by device
 //!   - left header column: receiver (RX) channels grouped by device
 //!   - grid              : one cell per (RX, TX) pair; green check = active
-//!                         subscription. Click a cell to (un)subscribe.
+//!     subscription. Click a cell to (un)subscribe.
 //!
 //! Filter inputs above the headers narrow the visible TX / RX sets.
 //! Device groups are collapsible. The current-state model is rebuilt by
@@ -32,7 +32,43 @@ fn main() {
 }
 
 fn app() -> Element {
-    let state = use_signal(AppState::default);
+    let mut state = use_signal(AppState::default);
+
+    // Background re-poll loop. Iterates known devices every 5s and refreshes
+    // their RX channel state so subscription changes made elsewhere on the
+    // network surface without a manual rescan. Honors `state.live_updates`
+    // and skips while a full scan is in flight.
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let snapshot = {
+                let s = state.read();
+                if !s.live_updates || s.scanning {
+                    continue;
+                }
+                s.devices
+                    .iter()
+                    .map(|d| (d.name.clone(), d.ip))
+                    .collect::<Vec<_>>()
+            };
+            if snapshot.is_empty() {
+                continue;
+            }
+            for (name, ip) in snapshot {
+                let client = DanteClient::new(
+                    SocketAddr::new(ip, DEVICE_ARC_PORT),
+                    Duration::from_millis(800),
+                );
+                let Ok(rx) = client.all_rx_channels().await else {
+                    continue;
+                };
+                let mut s = state.write();
+                if let Some(d) = s.devices.iter_mut().find(|d| d.name == name && d.ip == ip) {
+                    d.rx_channels = rx;
+                }
+            }
+        }
+    });
 
     rsx! {
         document::Stylesheet { href: TAILWIND_CSS }

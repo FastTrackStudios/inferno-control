@@ -47,6 +47,21 @@ fn TopBar(state: Signal<AppState>, on_scan: EventHandler<MouseEvent>) -> Element
                 span { class: "text-xs text-neutral-500", "routing matrix" }
             }
             div { class: "flex items-center gap-2",
+                {
+                    let live = state.read().live_updates;
+                    rsx! {
+                        label { class: "flex items-center gap-1.5 text-xs text-neutral-400 select-none cursor-pointer",
+                            input {
+                                r#type: "checkbox",
+                                checked: live,
+                                onchange: move |e| {
+                                    state.write().live_updates = e.value() == "true";
+                                },
+                            }
+                            "Live updates"
+                        }
+                    }
+                }
                 button {
                     class: "px-3 py-1 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-medium",
                     disabled: scanning,
