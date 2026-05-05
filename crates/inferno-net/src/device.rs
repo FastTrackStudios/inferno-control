@@ -31,6 +31,19 @@ pub enum ServiceKind {
     ChanArc,
 }
 
+impl Device {
+    /// Returns the ARC port advertised over mDNS, falling back to the
+    /// standard `4440`. Some Inferno-AoIP devices use non-standard ports
+    /// (e.g. 4410), so always prefer what the device announced.
+    pub fn arc_port(&self) -> u16 {
+        self.services
+            .iter()
+            .find(|s| s.kind == ServiceKind::Arc)
+            .map(|s| s.port)
+            .unwrap_or(crate::protocol::DEVICE_ARC_PORT)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Channel {
     pub number: u16,

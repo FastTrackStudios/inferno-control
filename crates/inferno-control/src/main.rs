@@ -58,7 +58,13 @@ enum DeviceOp {
         details: bool,
     },
     /// Show detailed info for a single device
-    Info { ip: String },
+    Info {
+        ip: String,
+        /// ARC port override (defaults to 4440; some Inferno-AoIP devices
+        /// advertise non-standard ports such as 4410)
+        #[arg(long)]
+        port: Option<u16>,
+    },
     /// Rename device
     SetName { ip: String, name: String },
     /// Reset device name to factory default
@@ -206,7 +212,7 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Device { op } => match op {
             DeviceOp::List { json, details } => device_list(timeout, json, details, &aliases).await?,
-            DeviceOp::Info { ip } => device_info(ip, timeout, &aliases).await?,
+            DeviceOp::Info { ip, port } => device_info(ip, port, timeout, &aliases).await?,
             DeviceOp::SetName { ip, name } => {
                 client(&ip, timeout)?.set_device_name(&name).await?;
                 println!("ok");
@@ -356,7 +362,8 @@ async fn device_list(
         let Some(ip) = d.addresses.iter().find(|a| a.is_ipv4()).copied() else {
             continue;
         };
-        let c = DanteClient::new(SocketAddr::new(ip, DEVICE_ARC_PORT), timeout);
+        let arc_port = d.arc_port();
+        let c = DanteClient::new(SocketAddr::new(ip, arc_port), timeout);
         let info = c.device_info().await.ok();
         let count = c.channel_count().await.ok();
         let settings = c.device_settings().await.ok();
@@ -367,6 +374,7 @@ async fn device_list(
             "name": d.name,
             "alias": alias,
             "ip": ip.to_string(),
+            "arc_port": arc_port,
             "model": info.as_ref().map(|i| &i.model_name),
             "tx_count": count.map(|c| c.tx_count),
             "rx_count": count.map(|c| c.rx_count),
@@ -399,8 +407,16 @@ async fn device_list(
     Ok(())
 }
 
-async fn device_info(ip: String, timeout: Duration, aliases: &Aliases) -> Result<()> {
-    let c = client(&ip, timeout)?;
+async fn device_info(
+    ip: String,
+    port: Option<u16>,
+    timeout: Duration,
+    aliases: &Aliases,
+) -> Result<()> {
+    let c = match port {
+        Some(p) => DanteClient::new(format!("{ip}:{p}").parse()?, timeout),
+        None => client(&ip, timeout)?,
+    };
     let name = c.device_name().await?;
     let info = c.device_info().await?;
     let count = c.channel_count().await?;
