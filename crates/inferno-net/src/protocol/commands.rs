@@ -336,6 +336,64 @@ pub fn cmd_set_interface_static(
     pack_settings(&payload)
 }
 
+/// Settings port: probe make/model response. Sent fire-and-forget; the
+/// device replies asynchronously as a multicast on
+/// `224.0.0.231:DEVICE_INFO_PORT (8702)` with conmon opcode 0x00C0.
+/// `device_mac` must be the *target device's* MAC (not the controller's).
+/// Mirrors netaudio `command_make_model`.
+pub fn cmd_make_model_probe(device_mac: [u8; 6]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(40);
+    payload.extend_from_slice(&0x0FDBu16.to_be_bytes());
+    payload.extend_from_slice(&0u16.to_be_bytes());
+    payload.extend_from_slice(&device_mac);
+    payload.extend_from_slice(&0u16.to_be_bytes());
+    payload.extend_from_slice(SETTINGS_MAGIC_BASE);
+    payload.push(0x07);
+    payload.push(0x31);
+    // conmon op 0x00C1 (make/model request)
+    payload.extend_from_slice(&[0x00, 0xC1, 0x00, 0x00, 0x00, 0x00]);
+    pack_settings(&payload)
+}
+
+/// Settings port: probe Dante board (codename + name). Response on the
+/// same multicast as `cmd_make_model_probe` with conmon opcode 0x0060.
+/// `device_mac` is the target device's MAC. Mirrors netaudio
+/// `command_dante_model`.
+pub fn cmd_dante_model_probe(device_mac: [u8; 6]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(40);
+    payload.extend_from_slice(&0x0FDBu16.to_be_bytes());
+    payload.extend_from_slice(&0u16.to_be_bytes());
+    payload.extend_from_slice(&device_mac);
+    payload.extend_from_slice(&0u16.to_be_bytes());
+    payload.extend_from_slice(SETTINGS_MAGIC_BASE);
+    payload.push(0x07);
+    payload.push(0x31);
+    // conmon op 0x0061 (dante model request)
+    payload.extend_from_slice(&[0x00, 0x61, 0x00, 0x00, 0x00, 0x00]);
+    pack_settings(&payload)
+}
+
+/// Settings port: probe bluetooth status. `host_mac` is the *controller's*
+/// MAC (not the device's) — the device echoes it back on the response so
+/// the controller can correlate. Mirrors netaudio `command_bluetooth_status`.
+pub fn cmd_bluetooth_status_probe(host_mac: [u8; 6]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(48);
+    payload.extend_from_slice(&0u16.to_be_bytes());
+    payload.extend_from_slice(&0u16.to_be_bytes());
+    payload.extend_from_slice(&host_mac);
+    payload.extend_from_slice(&0u16.to_be_bytes());
+    payload.extend_from_slice(SETTINGS_MAGIC_BASE);
+    payload.push(0x07);
+    payload.push(0x3a);
+    // conmon op 0x100D (bluetooth status request) plus the protobuf-style
+    // selector that pins the response shape parsed by `parse_bluetooth_status`.
+    payload.extend_from_slice(&[0x10, 0x0d, 0x00, 0x00, 0x00, 0x00]);
+    payload.extend_from_slice(&[0x00, 0x0c, 0x00, 0x0c, 0x0a, 0x0a]);
+    payload.extend_from_slice(&[0x10, 0x09, 0x1a, 0x06, 0x0a, 0x04]);
+    payload.extend_from_slice(&[0x0a, 0x02, 0x08, 0x01]);
+    pack_settings(&payload)
+}
+
 /// Settings port: probe interface status.
 pub fn cmd_probe_interface_status(host_mac: Option<[u8; 6]>) -> Vec<u8> {
     let mac = host_mac.unwrap_or([0; 6]);

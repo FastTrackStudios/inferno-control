@@ -314,3 +314,173 @@ pub fn parse_tx_flows(resp: &DanteResponse) -> Vec<TxFlow> {
     }
     flows
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MakeModel {
+    pub manufacturer: String,
+    pub product_name: String,
+    /// `major.minor.build` formatted version, when reported.
+    pub product_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DanteModel {
+    pub board_codename: String,
+    pub board_name: String,
+}
+
+/// Conmon offset constants from netaudio
+/// `dante/services/notification.py` (`CONMON_*`).
+const CONMON_MANUFACTURER_OFFSET: usize = 0x4C;
+const CONMON_PRODUCT_NAME_OFFSET: usize = 0xCC;
+const CONMON_PRODUCT_VERSION_OFFSET: usize = 0x14C;
+const CONMON_BOARD_CODENAME_OFFSET: usize = 0x2C;
+const CONMON_BOARD_NAME_OFFSET: usize = 0x58;
+
+/// Read an ASCII C-string of bounded length, stripping leading bytes
+/// `< 0x20` (some firmwares prepend a length-byte prefix) and
+/// terminating at the first NUL. Returns an empty string on bounds
+/// errors. Mirrors `_extract_null_terminated_string` in
+/// netaudio's notification parser.
+fn read_conmon_string(data: &[u8], start: usize, end: usize) -> String {
+    if start >= data.len() {
+        return String::new();
+    }
+    let real_end = end.min(data.len());
+    let raw = &data[start..real_end];
+    let trimmed = raw.iter().position(|&b| b >= 0x20).unwrap_or(raw.len());
+    let region = &raw[trimmed..];
+    let nul = region.iter().position(|&b| b == 0).unwrap_or(region.len());
+    String::from_utf8_lossy(&region[..nul]).into_owned()
+}
+
+/// Parse a make/model conmon multicast response (opcode `0x00C0`).
+/// Caller is responsible for collecting the datagram from
+/// `224.0.0.231:DEVICE_INFO_PORT (8702)` and identifying the opcode at
+/// `magic_pos+10` (where `magic_pos` is `data.find(b"Audinate", 4)`).
+pub fn parse_make_model(data: &[u8]) -> MakeModel {
+    let manufacturer =
+        read_conmon_string(data, CONMON_MANUFACTURER_OFFSET, CONMON_PRODUCT_NAME_OFFSET);
+    let product_name = read_conmon_string(
+        data,
+        CONMON_PRODUCT_NAME_OFFSET,
+        CONMON_PRODUCT_VERSION_OFFSET,
+    );
+    let product_version = if data.len() >= CONMON_PRODUCT_VERSION_OFFSET + 4 {
+        let p = CONMON_PRODUCT_VERSION_OFFSET;
+        let major = data[p];
+        let minor = data[p + 1];
+        let build = data[p + 3];
+        if (major, minor, build) == (0, 0, 0) {
+            None
+        } else {
+            Some(format!("{major}.{minor}.{build}"))
+        }
+    } else {
+        None
+    };
+    MakeModel {
+        manufacturer,
+        product_name,
+        product_version,
+    }
+}
+
+/// Parse a dante-model conmon multicast response (opcode `0x0060`).
+pub fn parse_dante_model(data: &[u8]) -> DanteModel {
+    DanteModel {
+        board_codename: read_conmon_string(
+            data,
+            CONMON_BOARD_CODENAME_OFFSET,
+            CONMON_BOARD_NAME_OFFSET,
+        ),
+        board_name: read_conmon_string(
+            data,
+            CONMON_BOARD_NAME_OFFSET,
+            CONMON_BOARD_NAME_OFFSET + 64,
+        ),
+    }
+}
+
+/// Locate the conmon opcode in a multicast response. Returns the u16 at
+/// offset `magic_pos + 10` where `magic_pos` is the position of the
+/// `Audinate` magic string (searched starting at offset 4 to skip the
+/// outer mcast header). `None` if the magic isn't present.
+pub fn conmon_opcode(data: &[u8]) -> Option<u16> {
+    if data.len() < 4 {
+        return None;
+    }
+    // Substring search for b"Audinate" starting at offset 4.
+    let needle = b"Audinate";
+    let start = 4;
+    let pos = (start..=data.len().saturating_sub(needle.len()))
+        .find(|&i| &data[i..i + needle.len()] == needle)?;
+    if pos + 12 > data.len() {
+        return None;
+    }
+    Some(u16::from_be_bytes([data[pos + 10], data[pos + 11]]))
+}
+
+#[cfg(test)]
+mod conmon_tests {
+    use super::*;
+
+    fn synth_response(opcode: u16, fill_at: &[(usize, &[u8])]) -> Vec<u8> {
+        // 32-byte mcast outer header, then "Audinate" magic at offset 32,
+        // then opcode at +10 from magic. Fill payload regions for the
+        // string offsets we want to test.
+        let mut data = vec![0u8; 0x200];
+        data[0..2].copy_from_slice(&0xFFFFu16.to_be_bytes()); // start_code
+        data[32..40].copy_from_slice(b"Audinate");
+        data[42..44].copy_from_slice(&opcode.to_be_bytes());
+        for (off, bytes) in fill_at {
+            data[*off..*off + bytes.len()].copy_from_slice(bytes);
+        }
+        data
+    }
+
+    #[test]
+    fn parses_make_model() {
+        let data = synth_response(
+            0x00C0,
+            &[
+                (CONMON_MANUFACTURER_OFFSET, b"Audinate Pty Ltd\0"),
+                (CONMON_PRODUCT_NAME_OFFSET, b"AVIO-USB\0"),
+                (CONMON_PRODUCT_VERSION_OFFSET, &[1, 2, 0, 7]),
+            ],
+        );
+        assert_eq!(conmon_opcode(&data), Some(0x00C0));
+        let mm = parse_make_model(&data);
+        assert_eq!(mm.manufacturer, "Audinate Pty Ltd");
+        assert_eq!(mm.product_name, "AVIO-USB");
+        assert_eq!(mm.product_version.as_deref(), Some("1.2.7"));
+    }
+
+    #[test]
+    fn parses_dante_model() {
+        let data = synth_response(
+            0x0060,
+            &[
+                (CONMON_BOARD_CODENAME_OFFSET, b"BRAVO\0"),
+                (CONMON_BOARD_NAME_OFFSET, b"Brooklyn II\0"),
+            ],
+        );
+        let dm = parse_dante_model(&data);
+        assert_eq!(dm.board_codename, "BRAVO");
+        assert_eq!(dm.board_name, "Brooklyn II");
+    }
+
+    #[test]
+    fn make_model_omits_zero_version() {
+        let data = synth_response(
+            0x00C0,
+            &[
+                (CONMON_MANUFACTURER_OFFSET, b"Vendor\0"),
+                (CONMON_PRODUCT_NAME_OFFSET, b"Product\0"),
+                (CONMON_PRODUCT_VERSION_OFFSET, &[0, 0, 0, 0]),
+            ],
+        );
+        let mm = parse_make_model(&data);
+        assert!(mm.product_version.is_none());
+    }
+}
