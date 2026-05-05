@@ -7,6 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 
+use inferno_net::aliases::Aliases;
 use inferno_net::protocol::commands::{ChannelDirection, GainDirection};
 use inferno_net::protocol::{DanteClient, DEVICE_ARC_PORT};
 
@@ -19,6 +20,11 @@ struct Cli {
     /// Discovery / request timeout in seconds
     #[arg(long, default_value_t = 2)]
     timeout: u64,
+
+    /// Optional TOML file with extra `[[alias]]` rules; overrides bundled
+    /// defaults. Falls back to $INFERNO_ALIASES if unset.
+    #[arg(long, global = true, env = "INFERNO_ALIASES")]
+    aliases: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -195,11 +201,12 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let timeout = Duration::from_secs(cli.timeout);
+    let aliases = Aliases::load_with_overrides(cli.aliases.as_deref())?;
 
     match cli.cmd {
         Cmd::Device { op } => match op {
-            DeviceOp::List { json, details } => device_list(timeout, json, details).await?,
-            DeviceOp::Info { ip } => device_info(ip, timeout).await?,
+            DeviceOp::List { json, details } => device_list(timeout, json, details, &aliases).await?,
+            DeviceOp::Info { ip } => device_info(ip, timeout, &aliases).await?,
             DeviceOp::SetName { ip, name } => {
                 client(&ip, timeout)?.set_device_name(&name).await?;
                 println!("ok");
@@ -302,14 +309,29 @@ fn client(ip: &str, timeout: Duration) -> Result<DanteClient> {
     Ok(DanteClient::new(arc_addr(ip)?, timeout))
 }
 
-async fn device_list(timeout: Duration, json: bool, details: bool) -> Result<()> {
+async fn device_list(
+    timeout: Duration,
+    json: bool,
+    details: bool,
+    aliases: &Aliases,
+) -> Result<()> {
     let devices = inferno_net::discovery::browse(timeout).await?;
     let mut list: Vec<_> = devices.into_values().collect();
     list.sort_by(|a, b| a.name.cmp(&b.name));
 
     if !details {
         if json {
-            println!("{}", serde_json::to_string_pretty(&list)?);
+            let with_alias: Vec<_> = list
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "name": d.name,
+                        "alias": aliases.lookup(&[&d.name]),
+                        "addresses": d.addresses.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&with_alias)?);
         } else {
             for d in &list {
                 let addrs = d
@@ -318,7 +340,11 @@ async fn device_list(timeout: Duration, json: bool, details: bool) -> Result<()>
                     .map(|a| a.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                println!("{:<32} {}", d.name, addrs);
+                let alias = aliases
+                    .lookup(&[&d.name])
+                    .map(|a| format!("  [{a}]"))
+                    .unwrap_or_default();
+                println!("{:<32} {}{}", d.name, addrs, alias);
             }
             println!("\n{} device(s)", list.len());
         }
@@ -334,8 +360,12 @@ async fn device_list(timeout: Duration, json: bool, details: bool) -> Result<()>
         let info = c.device_info().await.ok();
         let count = c.channel_count().await.ok();
         let settings = c.device_settings().await.ok();
+        let model_name = info.as_ref().map(|i| i.model_name.as_str()).unwrap_or("");
+        let model_code = info.as_ref().map(|i| i.model_code.as_str()).unwrap_or("");
+        let alias = aliases.lookup(&[&d.name, model_name, model_code]);
         rows.push(serde_json::json!({
             "name": d.name,
+            "alias": alias,
             "ip": ip.to_string(),
             "model": info.as_ref().map(|i| &i.model_name),
             "tx_count": count.map(|c| c.tx_count),
@@ -349,14 +379,15 @@ async fn device_list(timeout: Duration, json: bool, details: bool) -> Result<()>
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         println!(
-            "{:<28} {:<16} {:<24} {:>4}/{:<4} {:>6} {:>8}",
-            "NAME", "IP", "MODEL", "TX", "RX", "SR", "LAT_US"
+            "{:<28} {:<16} {:<22} {:<24} {:>4}/{:<4} {:>6} {:>8}",
+            "NAME", "IP", "ALIAS", "MODEL", "TX", "RX", "SR", "LAT_US"
         );
         for r in &rows {
             println!(
-                "{:<28} {:<16} {:<24} {:>4}/{:<4} {:>6} {:>8}",
+                "{:<28} {:<16} {:<22} {:<24} {:>4}/{:<4} {:>6} {:>8}",
                 r["name"].as_str().unwrap_or(""),
                 r["ip"].as_str().unwrap_or(""),
+                r["alias"].as_str().unwrap_or("-"),
                 r["model"].as_str().unwrap_or("-"),
                 r["tx_count"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                 r["rx_count"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
@@ -368,15 +399,17 @@ async fn device_list(timeout: Duration, json: bool, details: bool) -> Result<()>
     Ok(())
 }
 
-async fn device_info(ip: String, timeout: Duration) -> Result<()> {
+async fn device_info(ip: String, timeout: Duration, aliases: &Aliases) -> Result<()> {
     let c = client(&ip, timeout)?;
     let name = c.device_name().await?;
     let info = c.device_info().await?;
     let count = c.channel_count().await?;
     let settings = c.device_settings().await?;
+    let alias = aliases.lookup(&[&name, &info.model_name, &info.model_code]);
     let payload = serde_json::json!({
         "ip": ip,
         "name": name,
+        "alias": alias,
         "info": info,
         "channel_count": count,
         "settings": settings,

@@ -1,0 +1,20 @@
+# Built-in model aliases. Each rule matches if `pattern` (case-insensitive)
+# is a substring of any of: device name, model_name, model_code.
+# First match wins. Override or extend by passing a user file via the CLI
+# `--aliases <path>` flag, or by setting INFERNO_ALIASES=<path>.
+
+[[alias]]
+pattern = "AA-42"
+alias = "Galaxy32"
+
+[[alias]]
+pattern = "NY64-D"
+alias = "Yamaha TF-1"
+
+[[alias]]
+pattern = "Tio1608"
+alias = "Yamaha 1608 Stagebox"
+
+[[alias]]
+pattern = "x16D"
+alias = "Apollo x16D"

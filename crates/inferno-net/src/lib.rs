@@ -1,5 +1,6 @@
 //! inferno-net: Dante network audio control protocol.
 
+pub mod aliases;
 pub mod device;
 pub mod discovery;
 pub mod error;
