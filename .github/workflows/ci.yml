@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: clone fts-ui (path-dep sibling of inferno-control-gui)
-        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../FastTrackStudio/fts-ui"
+        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../../FastTrackStudio/fts-ui"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: clone fts-ui sibling
-        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../FastTrackStudio/fts-ui"
+        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../../FastTrackStudio/fts-ui"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: clone fts-ui sibling
-        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../FastTrackStudio/fts-ui"
+        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../../FastTrackStudio/fts-ui"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: clone fts-ui sibling
-        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../FastTrackStudio/fts-ui"
+        run: git clone --depth 1 https://github.com/FastTrackStudios/fts-ui.git "$GITHUB_WORKSPACE/../../FastTrackStudio/fts-ui"
       - name: install gui system deps
         run: |
           sudo apt-get update
