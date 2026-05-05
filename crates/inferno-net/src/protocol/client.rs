@@ -13,6 +13,8 @@ use super::consts::*;
 use super::packet::{DantePacket, DanteResponse};
 use super::parser;
 use crate::error::{Error, Result};
+use crate::host::HostIdentity;
+use crate::mcast::{MulticastListener, DEVICE_INFO_PORT, MULTICAST_GROUP_CONTROL_MONITORING};
 
 pub struct DanteClient {
     addr: SocketAddr,
@@ -250,6 +252,76 @@ impl DanteClient {
         }
     }
 
+    /// Send a settings-port (UDP/8700) packet to the device and wait
+    /// for the corresponding conmon multicast response on
+    /// `224.0.0.231:DEVICE_INFO_PORT (8702)`. Filters by source IP and
+    /// expected conmon opcode. Used for make/model, dante-model, and
+    /// AES67 probes.
+    async fn settings_probe_with_response(
+        &self,
+        packet: &[u8],
+        expected_opcode: u16,
+        timeout_dur: Duration,
+    ) -> Result<Vec<u8>> {
+        let listener =
+            MulticastListener::join(MULTICAST_GROUP_CONTROL_MONITORING, DEVICE_INFO_PORT)
+                .map_err(Error::Io)?;
+        // Send via the same fire-and-forget path the existing settings
+        // commands use.
+        let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+        let target = SocketAddr::new(self.addr.ip(), DEVICE_SETTINGS_PORT);
+        sock.send_to(packet, target).await?;
+        debug!("settings probe sent, awaiting multicast response");
+
+        let device_ip = self.addr.ip();
+        let deadline = tokio::time::Instant::now() + timeout_dur;
+        let mut buf = vec![0u8; 4096];
+        loop {
+            let remaining = match deadline.checked_duration_since(tokio::time::Instant::now()) {
+                Some(r) if !r.is_zero() => r,
+                _ => return Err(Error::Timeout),
+            };
+            let res = tokio::time::timeout(remaining, listener.recv_from(&mut buf)).await;
+            let (n, addr) = match res {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => return Err(Error::Io(e)),
+                Err(_) => return Err(Error::Timeout),
+            };
+            if addr.ip() != device_ip {
+                continue;
+            }
+            let data = &buf[..n];
+            if parser::conmon_opcode(data) == Some(expected_opcode) {
+                return Ok(data.to_vec());
+            }
+        }
+    }
+
+    /// Probe make/model + manufacturer + product version. Sends the
+    /// conmon `0x00C1` request and parses the `0x00C0` multicast
+    /// response. `device_mac` is the *device's* MAC (typically the
+    /// lower 6 bytes of its mDNS-advertised EUI-64); pass `[0; 6]` if
+    /// unknown — most devices accept the broadcast form.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn probe_make_model(&self, device_mac: [u8; 6]) -> Result<parser::MakeModel> {
+        let pkt = commands::cmd_make_model_probe(device_mac);
+        let resp = self
+            .settings_probe_with_response(&pkt, 0x00C0, self.timeout)
+            .await?;
+        Ok(parser::parse_make_model(&resp))
+    }
+
+    /// Probe Dante board codename + name. Conmon `0x0061` →
+    /// `0x0060`. Same `device_mac` semantics as `probe_make_model`.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn probe_dante_model(&self, device_mac: [u8; 6]) -> Result<parser::DanteModel> {
+        let pkt = commands::cmd_dante_model_probe(device_mac);
+        let resp = self
+            .settings_probe_with_response(&pkt, 0x0060, self.timeout)
+            .await?;
+        Ok(parser::parse_dante_model(&resp))
+    }
+
     async fn send_arc_raw_no_check(&self, packet: &[u8]) -> Result<DanteResponse> {
         let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
         sock.connect(self.addr).await?;
@@ -434,6 +506,47 @@ impl DanteClient {
             gain_level,
         ))
         .await
+    }
+
+    /// Subscribe the controller to the device's metering multicast
+    /// stream. Sends a CMC port (8800) `command_metering_start` packet;
+    /// caller is responsible for listening on
+    /// `224.0.0.231:metering_port` (see
+    /// [`crate::metering::capture_one`] or
+    /// [`crate::mcast::MulticastListener`]).
+    ///
+    /// `host` should come from
+    /// [`crate::host::discover_for(device_ip)`]. `device_name` must
+    /// match what the device reports via mDNS / `device_name`.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn start_metering(
+        &self,
+        device_name: &str,
+        host: HostIdentity,
+        metering_port: u16,
+    ) -> Result<()> {
+        let pkt = commands::cmd_metering_start(
+            device_name,
+            host.ipv4.octets(),
+            host.mac,
+            metering_port,
+            true,
+            Self::next_txn(),
+        );
+        let target = SocketAddr::new(self.addr.ip(), DEVICE_CONTROL_PORT);
+        let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+        sock.send_to(&pkt, target).await?;
+        Ok(())
+    }
+
+    /// Tell the device to stop its metering stream.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn stop_metering(&self, device_name: &str, host: HostIdentity) -> Result<()> {
+        let pkt = commands::cmd_metering_stop(device_name, host.mac, Self::next_txn());
+        let target = SocketAddr::new(self.addr.ip(), DEVICE_CONTROL_PORT);
+        let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+        sock.send_to(&pkt, target).await?;
+        Ok(())
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]

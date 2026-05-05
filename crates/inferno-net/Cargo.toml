@@ -21,3 +21,4 @@ async-trait.workspace = true
 rand.workspace = true
 toml.workspace = true
 socket2.workspace = true
+network-interface.workspace = true

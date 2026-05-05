@@ -4,6 +4,7 @@ pub mod aliases;
 pub mod device;
 pub mod discovery;
 pub mod error;
+pub mod host;
 pub mod mcast;
 pub mod metering;
 pub mod protocol;

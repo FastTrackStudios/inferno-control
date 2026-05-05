@@ -120,6 +120,37 @@ enum DeviceOp {
     /// Sends a privileged ARC write and inspects result_code (0x0600 =
     /// locked, 0x0001 = unlocked, anything else = unknown).
     LockState { ip: String },
+    /// Probe make/model + dante-board info via conmon multicast.
+    /// Sends settings-port requests and listens on 224.0.0.231:8702
+    /// for the responses. Requires multicast routing to the device.
+    Probe {
+        ip: String,
+        /// Device MAC (12 hex chars, optionally :- separated). Most
+        /// devices accept the broadcast form when omitted.
+        #[arg(long)]
+        device_mac: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Capture one frame of channel metering levels from the device.
+    /// Sends a CMC start_metering subscribe, listens on
+    /// 224.0.0.231:8752, parses the first matching datagram, then
+    /// sends stop_metering. Requires that the device actually supports
+    /// metering (most do; inferno-aoip software endpoints do not).
+    Meter {
+        ip: String,
+        /// Device name as it appears in mDNS / `device_name`. Required
+        /// for the CMC subscribe packet. If omitted, we resolve via
+        /// the ARC `device_name` query first.
+        #[arg(long)]
+        name: Option<String>,
+        /// Override the listener port (default 8752; Dante Controller
+        /// uses 8751).
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -283,6 +314,17 @@ async fn main() -> Result<()> {
                 Some(false) => println!("unlocked"),
                 None => println!("unknown (unexpected result_code)"),
             },
+            DeviceOp::Probe {
+                ip,
+                device_mac,
+                json,
+            } => device_probe(ip, device_mac, timeout, json).await?,
+            DeviceOp::Meter {
+                ip,
+                name,
+                port,
+                json,
+            } => device_meter(ip, name, port, timeout, json).await?,
         },
         Cmd::Channel { op } => match op {
             ChannelOp::List { ip, json } => channel_list(ip, timeout, json).await?,
@@ -870,9 +912,129 @@ async fn flow_list(ip: String, protocol: Option<u16>, timeout: Duration, json: b
     Ok(())
 }
 
+fn parse_mac_arg(s: &str) -> Result<[u8; 6]> {
+    let cleaned: String = s
+        .chars()
+        .filter(|c| !matches!(c, ':' | '-' | '.'))
+        .collect();
+    if cleaned.len() != 12 {
+        return Err(anyhow!("MAC must be 12 hex chars, got {:?}", s));
+    }
+    let mut out = [0u8; 6];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let pair = &cleaned[i * 2..i * 2 + 2];
+        *byte = u8::from_str_radix(pair, 16)
+            .with_context(|| format!("invalid MAC hex byte `{pair}`"))?;
+    }
+    Ok(out)
+}
+
+async fn device_probe(
+    ip: String,
+    device_mac: Option<String>,
+    timeout: Duration,
+    json: bool,
+) -> Result<()> {
+    let mac = match device_mac.as_deref() {
+        Some(s) => parse_mac_arg(s)?,
+        None => [0u8; 6],
+    };
+    let c = client(&ip, timeout)?;
+    let make_model = c.probe_make_model(mac).await.ok();
+    let dante_model = c.probe_dante_model(mac).await.ok();
+    let payload = serde_json::json!({
+        "ip": ip,
+        "make_model": make_model,
+        "dante_model": dante_model,
+    });
+    if json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        if let Some(mm) = &make_model {
+            println!("manufacturer    : {}", mm.manufacturer);
+            println!("product_name    : {}", mm.product_name);
+            if let Some(v) = &mm.product_version {
+                println!("product_version : {v}");
+            }
+        } else {
+            println!("(no make/model response)");
+        }
+        if let Some(dm) = &dante_model {
+            println!("board_codename  : {}", dm.board_codename);
+            println!("board_name      : {}", dm.board_name);
+        } else {
+            println!("(no dante-model response)");
+        }
+    }
+    Ok(())
+}
+
+async fn device_meter(
+    ip: String,
+    name: Option<String>,
+    port: Option<u16>,
+    timeout: Duration,
+    json: bool,
+) -> Result<()> {
+    let arc_addr: SocketAddr = arc_addr(&ip)?;
+    let device_ip: IpAddr = arc_addr.ip();
+    let c = DanteClient::new(arc_addr, timeout);
+    let device_name = match name {
+        Some(n) => n,
+        None => c.device_name().await?,
+    };
+    let count = c.channel_count().await?;
+    let host = inferno_net::host::discover_for(device_ip)?;
+    let metering_port = port.unwrap_or(inferno_net::mcast::DEFAULT_METERING_PORT);
+    c.start_metering(&device_name, host, metering_port).await?;
+    let result = inferno_net::metering::capture_one(
+        device_ip,
+        count.tx_count,
+        count.rx_count,
+        timeout,
+        Some(metering_port),
+    )
+    .await;
+    let _ = c.stop_metering(&device_name, host).await;
+    let levels = result?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&levels)?);
+    } else {
+        println!("TX levels:");
+        for (n, v) in &levels.tx {
+            println!("  {n:>3}: {v}");
+        }
+        println!("RX levels:");
+        for (n, v) in &levels.rx {
+            println!("  {n:>3}: {v}");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_bulk_rows;
+    use super::parse_mac_arg;
+
+    #[test]
+    fn parses_colon_mac() {
+        assert_eq!(
+            parse_mac_arg("aa:bb:cc:11:22:33").unwrap(),
+            [0xaa, 0xbb, 0xcc, 0x11, 0x22, 0x33]
+        );
+    }
+    #[test]
+    fn parses_packed_mac() {
+        assert_eq!(
+            parse_mac_arg("AABBCCDDEEFF").unwrap(),
+            [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]
+        );
+    }
+    #[test]
+    fn rejects_short_mac() {
+        assert!(parse_mac_arg("aa:bb:cc").is_err());
+    }
 
     #[test]
     fn parses_csv_skipping_comments_and_blanks() {
