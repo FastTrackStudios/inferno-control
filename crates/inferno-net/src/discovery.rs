@@ -41,9 +41,7 @@ pub async fn browse(duration: Duration) -> Result<HashMap<String, Device>> {
         if *kind == ServiceKind::ChanArc {
             continue;
         }
-        let rx = daemon
-            .browse(svc)
-            .map_err(|e| Error::Mdns(e.to_string()))?;
+        let rx = daemon.browse(svc).map_err(|e| Error::Mdns(e.to_string()))?;
         receivers.push((*svc, rx));
     }
 
@@ -66,21 +64,23 @@ pub async fn browse(duration: Duration) -> Result<HashMap<String, Device>> {
                         .map(|(n, _)| n.to_string())
                         .unwrap_or_else(|| fullname.clone());
 
-                    let entry = devices.entry(device_name.clone()).or_insert_with(|| Device {
-                        name: device_name.clone(),
-                        manufacturer: None,
-                        model: None,
-                        addresses: Vec::new(),
-                        services: Vec::new(),
-                        tx_channels: Vec::new(),
-                        rx_channels: Vec::new(),
-                        subscriptions: Vec::new(),
-                        sample_rate: None,
-                        latency_ns: None,
-                    });
+                    let entry = devices
+                        .entry(device_name.clone())
+                        .or_insert_with(|| Device {
+                            name: device_name.clone(),
+                            manufacturer: None,
+                            model: None,
+                            addresses: Vec::new(),
+                            services: Vec::new(),
+                            tx_channels: Vec::new(),
+                            rx_channels: Vec::new(),
+                            subscriptions: Vec::new(),
+                            sample_rate: None,
+                            latency_ns: None,
+                        });
 
                     for ip in info.get_addresses() {
-                        let ip: IpAddr = (*ip).into();
+                        let ip: IpAddr = *ip;
                         if !entry.addresses.contains(&ip) {
                             entry.addresses.push(ip);
                         }

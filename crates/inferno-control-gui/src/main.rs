@@ -102,7 +102,11 @@ pub(crate) async fn toggle_subscription(
             .await
     };
     match result {
-        Ok(()) => Status::ok(if already { "unsubscribed" } else { "subscribed" }),
+        Ok(()) => Status::ok(if already {
+            "unsubscribed"
+        } else {
+            "subscribed"
+        }),
         Err(e) => Status::err(&format!("{e}")),
     }
 }

@@ -103,7 +103,8 @@ fn RoutingMatrix(state: Signal<AppState>) -> Element {
     let rx_filter = s.rx_filter.clone();
 
     // Visible TX columns: device + channels (after filter, after collapse).
-    let mut tx_cols: Vec<(&DeviceEntry, Vec<&inferno_net::protocol::parser::TxChannel>)> = Vec::new();
+    let mut tx_cols: Vec<(&DeviceEntry, Vec<&inferno_net::protocol::parser::TxChannel>)> =
+        Vec::new();
     for d in &s.devices {
         let chans: Vec<_> = d.visible_tx(&tx_filter).collect();
         if chans.is_empty() {
@@ -112,7 +113,8 @@ fn RoutingMatrix(state: Signal<AppState>) -> Element {
         let chans = if d.tx_collapsed { vec![] } else { chans };
         tx_cols.push((d, chans));
     }
-    let mut rx_rows: Vec<(&DeviceEntry, Vec<&inferno_net::protocol::parser::RxChannel>)> = Vec::new();
+    let mut rx_rows: Vec<(&DeviceEntry, Vec<&inferno_net::protocol::parser::RxChannel>)> =
+        Vec::new();
     for d in &s.devices {
         let chans: Vec<_> = d.visible_rx(&rx_filter).collect();
         if chans.is_empty() {
@@ -300,7 +302,12 @@ fn RxChannelRow(
     let rx_dev_ip = rx_dev.ip;
 
     // Pre-collect TX columns to render alongside this row.
-    let tx_columns: Vec<(String, inferno_net::protocol::parser::TxChannel, bool, usize)> = s
+    let tx_columns: Vec<(
+        String,
+        inferno_net::protocol::parser::TxChannel,
+        bool,
+        usize,
+    )> = s
         .devices
         .iter()
         .enumerate()

@@ -32,10 +32,16 @@ pub struct Status {
 
 impl Status {
     pub fn ok(msg: &str) -> Self {
-        Self { message: msg.into(), error: false }
+        Self {
+            message: msg.into(),
+            error: false,
+        }
     }
     pub fn err(msg: &str) -> Self {
-        Self { message: msg.into(), error: true }
+        Self {
+            message: msg.into(),
+            error: true,
+        }
     }
 }
 

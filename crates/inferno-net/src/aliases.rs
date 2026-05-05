@@ -43,7 +43,9 @@ impl Aliases {
     pub fn bundled() -> Self {
         let parsed: AliasFile =
             toml::from_str(BUNDLED_ALIASES).expect("bundled aliases.toml must parse");
-        Self { rules: parsed.aliases }
+        Self {
+            rules: parsed.aliases,
+        }
     }
 
     /// Bundled defaults plus user rules from `path` (user rules take precedence).
@@ -91,10 +93,16 @@ mod tests {
     #[test]
     fn bundled_includes_known_models() {
         let a = Aliases::bundled();
-        assert_eq!(a.lookup(&["Y001-Yamaha-Tio1608-D-1533c8"]), Some("Yamaha 1608 Stagebox"));
+        assert_eq!(
+            a.lookup(&["Y001-Yamaha-Tio1608-D-1533c8"]),
+            Some("Yamaha 1608 Stagebox")
+        );
         assert_eq!(a.lookup(&["AA-4202524000109"]), Some("Galaxy32"));
         assert_eq!(a.lookup(&["x16D--293bb0"]), Some("Apollo x16D"));
-        assert_eq!(a.lookup(&["Y000-Yamaha-NY64-D-152434"]), Some("Yamaha TF-1"));
+        assert_eq!(
+            a.lookup(&["Y000-Yamaha-NY64-D-152434"]),
+            Some("Yamaha TF-1")
+        );
     }
 
     #[test]

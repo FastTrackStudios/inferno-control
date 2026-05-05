@@ -35,14 +35,21 @@ impl DanteClient {
         let txn = (rand::rng().next_u32() & 0xFFFF) as u16;
         let req = DantePacket::build_request(opcode, payload, txn);
         let started = Instant::now();
-        trace!(txn = format_args!("{:#06x}", txn), bytes = req.len(), "arc request");
+        trace!(
+            txn = format_args!("{:#06x}", txn),
+            bytes = req.len(),
+            "arc request"
+        );
         sock.send(&req).await?;
 
         let mut buf = vec![0u8; 4096];
         let n = match timeout(self.timeout, sock.recv(&mut buf)).await {
             Ok(r) => r?,
             Err(_) => {
-                warn!(elapsed_ms = started.elapsed().as_millis() as u64, "arc request timeout");
+                warn!(
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "arc request timeout"
+                );
                 return Err(Error::Timeout);
             }
         };
@@ -77,11 +84,7 @@ impl DanteClient {
                 resp.result_code
             )));
         }
-        let trimmed = resp
-            .body
-            .split(|&b| b == 0)
-            .next()
-            .unwrap_or(&resp.body);
+        let trimmed = resp.body.split(|&b| b == 0).next().unwrap_or(&resp.body);
         Ok(String::from_utf8_lossy(trimmed).into_owned())
     }
 
@@ -118,7 +121,9 @@ impl DanteClient {
         payload.extend_from_slice(&starting.to_be_bytes());
         payload.extend_from_slice(&0u16.to_be_bytes());
         let resp = self.query_raw(OPCODE_RX_CHANNELS, &payload).await?;
-        if resp.result_code != RESULT_CODE_SUCCESS && resp.result_code != RESULT_CODE_SUCCESS_EXTENDED {
+        if resp.result_code != RESULT_CODE_SUCCESS
+            && resp.result_code != RESULT_CODE_SUCCESS_EXTENDED
+        {
             return Err(Error::Protocol(format!(
                 "rx_channels result_code={:#06x}",
                 resp.result_code
@@ -136,7 +141,9 @@ impl DanteClient {
         payload.extend_from_slice(&starting.to_be_bytes());
         payload.extend_from_slice(&0u16.to_be_bytes());
         let resp = self.query_raw(OPCODE_TX_CHANNEL_INFO, &payload).await?;
-        if resp.result_code != RESULT_CODE_SUCCESS && resp.result_code != RESULT_CODE_SUCCESS_EXTENDED {
+        if resp.result_code != RESULT_CODE_SUCCESS
+            && resp.result_code != RESULT_CODE_SUCCESS_EXTENDED
+        {
             return Err(Error::Protocol(format!(
                 "tx_channels result_code={:#06x}",
                 resp.result_code
@@ -148,7 +155,7 @@ impl DanteClient {
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn all_rx_channels(&self) -> Result<Vec<parser::RxChannel>> {
         let count = self.channel_count().await?;
-        let pages = (count.rx_count + 15) / 16;
+        let pages = count.rx_count.div_ceil(16);
         let mut out = Vec::new();
         for page in 0..pages {
             let chans = self.rx_channels_page(page).await?;
@@ -164,7 +171,7 @@ impl DanteClient {
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn all_tx_channels(&self) -> Result<Vec<parser::TxChannel>> {
         let count = self.channel_count().await?;
-        let pages = ((count.tx_count + 15) / 16).max(1);
+        let pages = count.tx_count.div_ceil(16).max(1);
         let mut out = Vec::new();
         for page in (0..pages).step_by(2) {
             out.extend(self.tx_channels_page(page).await?);
@@ -189,7 +196,10 @@ impl DanteClient {
         let n = match timeout(self.timeout, sock.recv(&mut buf)).await {
             Ok(r) => r?,
             Err(_) => {
-                warn!(elapsed_ms = started.elapsed().as_millis() as u64, "arc command timeout");
+                warn!(
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "arc command timeout"
+                );
                 return Err(Error::Timeout);
             }
         };
@@ -231,7 +241,8 @@ impl DanteClient {
         channel_number: u8,
         new_name: &str,
     ) -> Result<()> {
-        let pkt = commands::cmd_set_channel_name(direction, channel_number, new_name, Self::next_txn());
+        let pkt =
+            commands::cmd_set_channel_name(direction, channel_number, new_name, Self::next_txn());
         self.send_arc_raw(&pkt).await?;
         Ok(())
     }
@@ -263,10 +274,7 @@ impl DanteClient {
     }
 
     #[instrument(level = "debug", skip(self, subs), fields(addr = %self.addr, count = subs.len()))]
-    pub async fn add_subscriptions_bulk(
-        &self,
-        subs: &[(u16, &str, &str)],
-    ) -> Result<()> {
+    pub async fn add_subscriptions_bulk(&self, subs: &[(u16, &str, &str)]) -> Result<()> {
         let pkt = commands::cmd_add_subscriptions(subs, Self::next_txn())?;
         self.send_arc_raw(&pkt).await?;
         Ok(())
@@ -309,7 +317,8 @@ impl DanteClient {
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn reboot(&self, host_mac: Option<[u8; 6]>) -> Result<()> {
-        self.send_settings_raw(&commands::cmd_reboot(host_mac)).await
+        self.send_settings_raw(&commands::cmd_reboot(host_mac))
+            .await
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
@@ -319,12 +328,14 @@ impl DanteClient {
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn set_sample_rate(&self, sample_rate: u32) -> Result<()> {
-        self.send_settings_raw(&commands::cmd_set_sample_rate(sample_rate)).await
+        self.send_settings_raw(&commands::cmd_set_sample_rate(sample_rate))
+            .await
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn set_encoding(&self, encoding: u8) -> Result<()> {
-        self.send_settings_raw(&commands::cmd_set_encoding(encoding)).await
+        self.send_settings_raw(&commands::cmd_set_encoding(encoding))
+            .await
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
@@ -335,14 +346,17 @@ impl DanteClient {
         gain_level: u8,
     ) -> Result<()> {
         self.send_settings_raw(&commands::cmd_set_gain_level(
-            direction, channel_number, gain_level,
+            direction,
+            channel_number,
+            gain_level,
         ))
         .await
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn enable_aes67(&self, enabled: bool, host_mac: Option<[u8; 6]>) -> Result<()> {
-        self.send_settings_raw(&commands::cmd_enable_aes67(enabled, host_mac)).await
+        self.send_settings_raw(&commands::cmd_enable_aes67(enabled, host_mac))
+            .await
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
@@ -362,7 +376,8 @@ impl DanteClient {
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn set_interface_dhcp(&self, host_mac: Option<[u8; 6]>) -> Result<()> {
-        self.send_settings_raw(&commands::cmd_set_interface_dhcp(host_mac)).await
+        self.send_settings_raw(&commands::cmd_set_interface_dhcp(host_mac))
+            .await
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
@@ -377,7 +392,9 @@ impl DanteClient {
         let to_v4 = |a: IpAddr| -> Result<[u8; 4]> {
             match a {
                 IpAddr::V4(v) => Ok(v.octets()),
-                IpAddr::V6(_) => Err(Error::Protocol("ipv6 not supported for static config".into())),
+                IpAddr::V6(_) => Err(Error::Protocol(
+                    "ipv6 not supported for static config".into(),
+                )),
             }
         };
         let pkt = commands::cmd_set_interface_static(

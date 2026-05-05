@@ -80,10 +80,7 @@ pub fn cmd_reset_channel_name(
 
 /// ARC: add 1..=16 subscriptions in a single packet.
 /// Each entry: (rx_channel_number, tx_channel_name, tx_device_name).
-pub fn cmd_add_subscriptions(
-    subscriptions: &[(u16, &str, &str)],
-    txn: u16,
-) -> Result<Vec<u8>> {
+pub fn cmd_add_subscriptions(subscriptions: &[(u16, &str, &str)], txn: u16) -> Result<Vec<u8>> {
     let count = subscriptions.len();
     if !(1..=16).contains(&count) {
         return Err(Error::Protocol(format!(
@@ -110,7 +107,8 @@ pub fn cmd_add_subscriptions(
         records.push((*rx_chan, tx_chan_abs as u16, tx_dev_abs as u16));
     }
 
-    let mut payload: Vec<u8> = Vec::with_capacity(records_total + padding_size + string_table.len());
+    let mut payload: Vec<u8> =
+        Vec::with_capacity(records_total + padding_size + string_table.len());
     let (rx0, tx_off0, dev_off0) = records[0];
     payload.extend_from_slice(&0u16.to_be_bytes());
     payload.extend_from_slice(&[0x02, count as u8, 0x00, rx0 as u8]);
@@ -122,7 +120,7 @@ pub fn cmd_add_subscriptions(
         payload.extend_from_slice(&tx_off.to_be_bytes());
         payload.extend_from_slice(&dev_off.to_be_bytes());
     }
-    payload.extend(std::iter::repeat(0u8).take(padding_size));
+    payload.extend(std::iter::repeat_n(0u8, padding_size));
     payload.extend_from_slice(&string_table);
 
     Ok(DantePacket::build_request(
@@ -239,11 +237,7 @@ pub enum GainDirection {
 }
 
 /// Settings port: set channel gain level (per-channel, vendor-specific scale).
-pub fn cmd_set_gain_level(
-    direction: GainDirection,
-    channel_number: u8,
-    gain_level: u8,
-) -> Vec<u8> {
+pub fn cmd_set_gain_level(direction: GainDirection, channel_number: u8, gain_level: u8) -> Vec<u8> {
     let mac = *b"RT\x00\x00\x00\x00";
     let (seq, type_byte) = match direction {
         GainDirection::Input => (0x0344u16, 0x01u8),
@@ -298,7 +292,7 @@ pub fn cmd_set_preferred_leader(
     body.extend_from_slice(&0x0002u16.to_be_bytes());
     body.extend_from_slice(&clock_source.to_be_bytes());
     body.push(if is_preferred { 0x01 } else { 0x00 });
-    body.extend(std::iter::repeat(0u8).take(55));
+    body.extend(std::iter::repeat_n(0u8, 55));
     let payload = settings_payload(0x0021, &mac, 0x3a, &body);
     pack_settings(&payload)
 }
@@ -310,9 +304,9 @@ pub fn cmd_set_interface_dhcp(host_mac: Option<[u8; 6]>) -> Vec<u8> {
     body.extend_from_slice(&0x0013u16.to_be_bytes());
     body.extend_from_slice(&0x64u32.to_be_bytes());
     body.extend_from_slice(&[0x01, 0x1c, 0x00, 0x10]);
-    body.extend(std::iter::repeat(0u8).take(16));
+    body.extend(std::iter::repeat_n(0u8, 16));
     body.extend_from_slice(&[0x00, 0x02, 0x00, 0x00]);
-    body.extend(std::iter::repeat(0u8).take(4));
+    body.extend(std::iter::repeat_n(0u8, 4));
     let payload = settings_payload(0x0000, &mac, 0x3a, &body);
     pack_settings(&payload)
 }
@@ -330,14 +324,14 @@ pub fn cmd_set_interface_static(
     body.extend_from_slice(&0x0013u16.to_be_bytes());
     body.extend_from_slice(&0x64u32.to_be_bytes());
     body.extend_from_slice(&[0x01, 0x1c, 0x0f, 0x10]);
-    body.extend(std::iter::repeat(0u8).take(4));
+    body.extend(std::iter::repeat_n(0u8, 4));
     body.extend_from_slice(&0x02u32.to_be_bytes());
     body.extend_from_slice(&ip);
     body.extend_from_slice(&netmask);
     body.extend_from_slice(&dns);
     body.extend_from_slice(&gateway);
     body.extend_from_slice(&[0x00, 0x02, 0x00, 0x00]);
-    body.extend(std::iter::repeat(0u8).take(4));
+    body.extend(std::iter::repeat_n(0u8, 4));
     let payload = settings_payload(0x0000, &mac, 0x3a, &body);
     pack_settings(&payload)
 }
@@ -348,7 +342,7 @@ pub fn cmd_probe_interface_status(host_mac: Option<[u8; 6]>) -> Vec<u8> {
     let mut body = Vec::with_capacity(20);
     body.extend_from_slice(&0x0013u16.to_be_bytes());
     body.extend_from_slice(&0x64u32.to_be_bytes());
-    body.extend(std::iter::repeat(0u8).take(8));
+    body.extend(std::iter::repeat_n(0u8, 8));
     let payload = settings_payload(0x0000, &mac, 0x3a, &body);
     pack_settings(&payload)
 }

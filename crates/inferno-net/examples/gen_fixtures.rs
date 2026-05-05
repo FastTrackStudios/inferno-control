@@ -26,12 +26,12 @@ fn header(opcode: u16, body: &[u8], txn: u16, result: u16) -> Vec<u8> {
 fn channel_count_body() -> Vec<u8> {
     let mut b = Vec::new();
     b.extend_from_slice(&0x0001u16.to_be_bytes()); // capability_flags
-    b.extend_from_slice(&16u16.to_be_bytes());     // tx_count
-    b.extend_from_slice(&16u16.to_be_bytes());     // rx_count
-    b.extend_from_slice(&4u16.to_be_bytes());      // tx_active
-    b.extend_from_slice(&4u16.to_be_bytes());      // rx_active
-    b.extend_from_slice(&32u16.to_be_bytes());     // max_tx_flows
-    b.extend_from_slice(&32u16.to_be_bytes());     // max_rx_flows
+    b.extend_from_slice(&16u16.to_be_bytes()); // tx_count
+    b.extend_from_slice(&16u16.to_be_bytes()); // rx_count
+    b.extend_from_slice(&4u16.to_be_bytes()); // tx_active
+    b.extend_from_slice(&4u16.to_be_bytes()); // rx_active
+    b.extend_from_slice(&32u16.to_be_bytes()); // max_tx_flows
+    b.extend_from_slice(&32u16.to_be_bytes()); // max_rx_flows
     b
 }
 
@@ -134,7 +134,7 @@ fn rx_channels_body() -> Vec<u8> {
     };
 
     let r0 = body_header as usize;
-    write(r0 + 0, &1u16.to_be_bytes(), &mut b);
+    write(r0, &1u16.to_be_bytes(), &mut b);
     write(r0 + 2, &0u16.to_be_bytes(), &mut b);
     write(r0 + 4, &sr1_off.to_be_bytes(), &mut b);
     write(r0 + 6, &tx1_chan.to_be_bytes(), &mut b);
@@ -144,7 +144,7 @@ fn rx_channels_body() -> Vec<u8> {
     write(r0 + 14, &0x0001u16.to_be_bytes(), &mut b); // sub_status
 
     let r1 = r0 + RECORD as usize;
-    write(r1 + 0, &2u16.to_be_bytes(), &mut b);
+    write(r1, &2u16.to_be_bytes(), &mut b);
     write(r1 + 2, &0u16.to_be_bytes(), &mut b);
     write(r1 + 4, &sr2_off.to_be_bytes(), &mut b);
     write(r1 + 6, &0u16.to_be_bytes(), &mut b);
@@ -198,11 +198,36 @@ fn main() -> std::io::Result<()> {
     fs::create_dir_all(&dir)?;
 
     let cases: Vec<(&str, u16, Vec<u8>, u16)> = vec![
-        ("channel_count", OPCODE_CHANNEL_COUNT, channel_count_body(), RESULT_CODE_SUCCESS),
-        ("device_info", OPCODE_DEVICE_INFO, device_info_body(), RESULT_CODE_SUCCESS),
-        ("device_settings", OPCODE_DEVICE_SETTINGS, device_settings_body(), RESULT_CODE_SUCCESS),
-        ("rx_channels", OPCODE_RX_CHANNELS, rx_channels_body(), RESULT_CODE_SUCCESS_EXTENDED),
-        ("tx_channels", OPCODE_TX_CHANNEL_INFO, tx_channels_body(), RESULT_CODE_SUCCESS_EXTENDED),
+        (
+            "channel_count",
+            OPCODE_CHANNEL_COUNT,
+            channel_count_body(),
+            RESULT_CODE_SUCCESS,
+        ),
+        (
+            "device_info",
+            OPCODE_DEVICE_INFO,
+            device_info_body(),
+            RESULT_CODE_SUCCESS,
+        ),
+        (
+            "device_settings",
+            OPCODE_DEVICE_SETTINGS,
+            device_settings_body(),
+            RESULT_CODE_SUCCESS,
+        ),
+        (
+            "rx_channels",
+            OPCODE_RX_CHANNELS,
+            rx_channels_body(),
+            RESULT_CODE_SUCCESS_EXTENDED,
+        ),
+        (
+            "tx_channels",
+            OPCODE_TX_CHANNEL_INFO,
+            tx_channels_body(),
+            RESULT_CODE_SUCCESS_EXTENDED,
+        ),
     ];
 
     for (name, opcode, body, result) in cases {
