@@ -30,6 +30,7 @@ futures = "0.3"
 async-trait = "0.1"
 rand = "0.9"
 toml = "0.8"
+socket2 = { version = "0.6", features = ["all"] }
 
 # Dioxus + design system. Mirrors the fts-ui workspace deps so we link the
 # same Dioxus toolchain. fts-ui is consumed as a path dep against a sibling

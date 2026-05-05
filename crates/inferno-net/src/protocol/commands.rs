@@ -394,6 +394,73 @@ pub fn cmd_bluetooth_status_probe(host_mac: [u8; 6]) -> Vec<u8> {
     pack_settings(&payload)
 }
 
+/// CMC port (UDP/8800): tell `device_name` to start streaming metering
+/// data to `(host_ipv4, port)` on multicast group 224.0.0.231.
+/// `host_mac` must be the controller's interface MAC; the device
+/// includes it in the response correlation. `timeout = true` is the
+/// normal "keep streaming" form; `timeout = false` together with a
+/// zeroed `host_ipv4` and `port = 0` is the implicit stop variant.
+///
+/// Mirrors `command_volume_start` / `command_metering_start` in
+/// `device_commands.py:441-497`.
+pub fn cmd_metering_start(
+    device_name: &str,
+    host_ipv4: [u8; 4],
+    host_mac: [u8; 6],
+    port: u16,
+    timeout: bool,
+    transaction_id: u16,
+) -> Vec<u8> {
+    let mut name_bytes = Vec::with_capacity(device_name.len() + 2);
+    name_bytes.extend_from_slice(device_name.as_bytes());
+    name_bytes.push(0);
+    if name_bytes.len() % 2 != 0 {
+        name_bytes.push(0);
+    }
+    let padded_name_len = name_bytes.len() as u16;
+    let offset_field_1 = 0x0A + padded_name_len;
+    let offset_field_2 = 0x0C + padded_name_len;
+    let tail_offset = offset_field_2 + 4;
+
+    let mut body = Vec::with_capacity(64 + name_bytes.len());
+    body.extend_from_slice(&CMC_OPCODE_METERING_START.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&host_mac);
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&4u16.to_be_bytes());
+    body.extend_from_slice(&offset_field_1.to_be_bytes());
+    body.extend_from_slice(&2u16.to_be_bytes());
+    body.extend_from_slice(&offset_field_2.to_be_bytes());
+    body.extend_from_slice(&0x000Au16.to_be_bytes());
+    body.extend_from_slice(&name_bytes);
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&1u16.to_be_bytes());
+    body.extend_from_slice(&tail_offset.to_be_bytes());
+    body.extend_from_slice(&1u16.to_be_bytes());
+    body.extend_from_slice(&port.to_be_bytes());
+    body.extend_from_slice(&(if timeout { 1u16 } else { 0 }).to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&host_ipv4);
+    body.extend_from_slice(&port.to_be_bytes());
+    body.extend(std::iter::repeat_n(0u8, 10));
+
+    let total_length = (4 + 2 + body.len()) as u16;
+    let mut packet = Vec::with_capacity(total_length as usize);
+    packet.extend_from_slice(&PROTOCOL_CMC.to_be_bytes());
+    packet.extend_from_slice(&total_length.to_be_bytes());
+    packet.extend_from_slice(&transaction_id.to_be_bytes());
+    packet.extend_from_slice(&body);
+    packet
+}
+
+/// CMC port: stop metering. Implicit-stop form per netaudio
+/// `command_volume_stop` — same packet shape with zeroed host
+/// address/port and `timeout = false`.
+pub fn cmd_metering_stop(device_name: &str, host_mac: [u8; 6], transaction_id: u16) -> Vec<u8> {
+    cmd_metering_start(device_name, [0; 4], host_mac, 0, false, transaction_id)
+}
+
 /// Settings port: probe interface status.
 pub fn cmd_probe_interface_status(host_mac: Option<[u8; 6]>) -> Vec<u8> {
     let mac = host_mac.unwrap_or([0; 6]);
