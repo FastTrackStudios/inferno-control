@@ -311,6 +311,20 @@ impl DanteClient {
         Ok(parser::parse_make_model(&resp))
     }
 
+    /// Probe bluetooth status. Conmon `0x100D` → `0x100E`.
+    /// `host_mac` is the *controller's* MAC (echoed back for
+    /// correlation) — get it from
+    /// [`crate::host::discover_for(device_ip)`].
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn probe_bluetooth(&self, host_mac: [u8; 6]) -> Result<parser::BluetoothStatus> {
+        let pkt = commands::cmd_bluetooth_status_probe(host_mac);
+        let resp = self
+            .settings_probe_with_response(&pkt, 0x100E, self.timeout)
+            .await?;
+        parser::parse_bluetooth_status(&resp)
+            .ok_or_else(|| Error::Protocol("could not parse bluetooth response".into()))
+    }
+
     /// Probe Dante board codename + name. Conmon `0x0061` →
     /// `0x0060`. Same `device_mac` semantics as `probe_make_model`.
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]

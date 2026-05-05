@@ -939,13 +939,19 @@ async fn device_probe(
         Some(s) => parse_mac_arg(s)?,
         None => [0u8; 6],
     };
-    let c = client(&ip, timeout)?;
+    let arc_addr_v: SocketAddr = arc_addr(&ip)?;
+    let c = DanteClient::new(arc_addr_v, timeout);
     let make_model = c.probe_make_model(mac).await.ok();
     let dante_model = c.probe_dante_model(mac).await.ok();
+    let bluetooth = match inferno_net::host::discover_for(arc_addr_v.ip()) {
+        Ok(host) => c.probe_bluetooth(host.mac).await.ok(),
+        Err(_) => None,
+    };
     let payload = serde_json::json!({
         "ip": ip,
         "make_model": make_model,
         "dante_model": dante_model,
+        "bluetooth": bluetooth,
     });
     if json {
         println!("{}", serde_json::to_string_pretty(&payload)?);
@@ -964,6 +970,18 @@ async fn device_probe(
             println!("board_name      : {}", dm.board_name);
         } else {
             println!("(no dante-model response)");
+        }
+        match &bluetooth {
+            Some(inferno_net::protocol::BluetoothStatus::Connected(name)) => {
+                println!("bluetooth       : connected ({name})")
+            }
+            Some(inferno_net::protocol::BluetoothStatus::Disconnected) => {
+                println!("bluetooth       : disconnected")
+            }
+            Some(inferno_net::protocol::BluetoothStatus::Unsupported) => {
+                println!("bluetooth       : unsupported")
+            }
+            None => {}
         }
     }
     Ok(())

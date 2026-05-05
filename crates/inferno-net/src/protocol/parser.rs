@@ -484,3 +484,156 @@ mod conmon_tests {
         assert!(mm.product_version.is_none());
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BluetoothStatus {
+    /// Bluetooth radio off / no controller in this product.
+    Unsupported,
+    /// Radio on but nothing paired.
+    Disconnected,
+    /// Connected to the named device.
+    Connected(String),
+}
+
+/// Parse a bluetooth-status conmon response (opcode `0x100E`). The
+/// format is *not* the simple fixed-offset conmon layout — it's a
+/// nested protobuf-style envelope of `[tag][len][body]` fields. The
+/// wrapper:
+///
+/// ```text
+/// [36] 0x12              field 2 (length-delimited)
+/// [37] field1_total_len  (varint, but always single-byte in practice)
+/// [38] 0x0a              field 1 (length-delimited, the actual payload)
+/// [39] field1_len        (single-byte payload length)
+/// [40 .. 40+field1_len]  payload
+/// ```
+///
+/// Inside the wrapper:
+/// - optional `0x18 <varint>` field 3 (skipped)
+/// - mandatory `0x22 <len> <body>` field 4 — the connection-status
+///   record, which itself looks like `0x0a <len> ... 0x12 <len> ...`
+///   with an inner `0x08 0x01` (connected) / `0x08 0x02` (disconnected)
+///   marker. When connected, the marker is followed by `0x12 <len>
+///   <utf8_device_name>`.
+///
+/// Mirrors `parse_bluetooth_status` + `_find_bluetooth_name` in
+/// netaudio's `device_parser.py:30-90`.
+pub fn parse_bluetooth_status(data: &[u8]) -> Option<BluetoothStatus> {
+    if data.len() < 50 || data[36] != 0x12 || data[38] != 0x0a {
+        return None;
+    }
+    let field1_len = data[39] as usize;
+    let mut pos = 40 + field1_len;
+
+    // Optional field 3 (varint).
+    if pos < data.len() && data[pos] == 0x18 {
+        pos += 1;
+        while pos < data.len() && data[pos] & 0x80 != 0 {
+            pos += 1;
+        }
+        pos += 1;
+    }
+
+    if pos >= data.len() || data[pos] != 0x22 {
+        return None;
+    }
+    pos += 1;
+    if pos >= data.len() {
+        return None;
+    }
+    let field4_len = data[pos] as usize;
+    pos += 1;
+    let field4_end = pos + field4_len;
+    if field4_end > data.len() {
+        return None;
+    }
+    let inner = &data[pos..field4_end];
+
+    // Inner record: `0x0a <len> ... 0x12 <len> ...`.
+    if inner.len() < 5 || inner[0] != 0x0a || inner[2] != 0x12 {
+        return Some(BluetoothStatus::Unsupported);
+    }
+    // Search for the `08 01 12` connected-marker. `08 02` = disconnected.
+    let marker_connected = inner.windows(3).position(|w| w == [0x08, 0x01, 0x12]);
+    if let Some(m) = marker_connected {
+        let name_len_pos = m + 3;
+        if name_len_pos >= inner.len() {
+            return Some(BluetoothStatus::Disconnected);
+        }
+        let name_len = inner[name_len_pos] as usize;
+        let name_start = name_len_pos + 1;
+        let name_end = name_start + name_len;
+        if name_end > inner.len() {
+            return Some(BluetoothStatus::Disconnected);
+        }
+        let name = String::from_utf8_lossy(&inner[name_start..name_end]).into_owned();
+        return Some(BluetoothStatus::Connected(name));
+    }
+    if inner.windows(2).any(|w| w == [0x08, 0x02]) {
+        return Some(BluetoothStatus::Disconnected);
+    }
+    Some(BluetoothStatus::Unsupported)
+}
+
+#[cfg(test)]
+mod bluetooth_tests {
+    use super::*;
+
+    fn wrap(inner: &[u8]) -> Vec<u8> {
+        // Synthesize a minimal 50+ byte response that the wrapper parser
+        // accepts. The wrapper expects:
+        //   [36] = 0x12
+        //   [37] = wrapper_len (1 byte)
+        //   [38] = 0x0a
+        //   [39] = field1_len = 0  (we use the optional `0x18 ...` form
+        //                            and the field4 follows immediately)
+        let mut data = vec![0u8; 50];
+        data[36] = 0x12;
+        data[37] = 0x10; // wrapper len (arbitrary)
+        data[38] = 0x0a;
+        data[39] = 0; // field1_len = 0
+                      // pos is now 40. Add field 3 varint (0x18 0x00) then field 4.
+        let mut tail = vec![0x18, 0x00, 0x22, inner.len() as u8];
+        tail.extend_from_slice(inner);
+        // Pad data so wrapper reaches into tail at offset 40.
+        data.truncate(40);
+        data.extend(tail);
+        // Pad to >= 50.
+        while data.len() < 50 {
+            data.push(0);
+        }
+        data
+    }
+
+    #[test]
+    fn parses_connected_with_name() {
+        let name = b"My iPhone";
+        let mut inner = vec![0x0a, 0x10, 0x12, 0x08]; // outer record header
+        inner.extend_from_slice(b"abcdefgh");
+        // connected marker + name
+        inner.extend_from_slice(&[0x08, 0x01, 0x12, name.len() as u8]);
+        inner.extend_from_slice(name);
+        let data = wrap(&inner);
+        match parse_bluetooth_status(&data) {
+            Some(BluetoothStatus::Connected(n)) => assert_eq!(n, "My iPhone"),
+            other => panic!("expected Connected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_disconnected() {
+        let mut inner = vec![0x0a, 0x04, 0x12, 0x02];
+        inner.extend_from_slice(&[0xaa, 0xbb]); // padding
+        inner.extend_from_slice(&[0x08, 0x02]); // disconnected marker
+        let data = wrap(&inner);
+        assert_eq!(
+            parse_bluetooth_status(&data),
+            Some(BluetoothStatus::Disconnected)
+        );
+    }
+
+    #[test]
+    fn rejects_too_short() {
+        assert_eq!(parse_bluetooth_status(&[0u8; 30]), None);
+    }
+}

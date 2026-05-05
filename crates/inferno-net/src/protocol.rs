@@ -14,7 +14,8 @@ pub use client::DanteClient;
 pub use consts::*;
 pub use packet::{DantePacket, DanteResponse};
 pub use parser::{
-    conmon_opcode, parse_channel_count, parse_dante_model, parse_device_info,
-    parse_device_settings, parse_make_model, parse_rx_channels, parse_tx_channels, parse_tx_flows,
-    ChannelCount, DanteModel, DeviceInfo, DeviceSettings, MakeModel, RxChannel, TxChannel, TxFlow,
+    conmon_opcode, parse_bluetooth_status, parse_channel_count, parse_dante_model,
+    parse_device_info, parse_device_settings, parse_make_model, parse_rx_channels,
+    parse_tx_channels, parse_tx_flows, BluetoothStatus, ChannelCount, DanteModel, DeviceInfo,
+    DeviceSettings, MakeModel, RxChannel, TxChannel, TxFlow,
 };
