@@ -30,6 +30,21 @@ pub const OPCODE_RX_CHANNEL_NAME_SET: u16 = 0x3001;
 pub const OPCODE_SUBSCRIPTION_ADD: u16 = 0x3010;
 pub const OPCODE_SUBSCRIPTION_REMOVE: u16 = 0x3014;
 
+// Flow-control opcodes. Use the 10-byte flow header (see
+// `DantePacket::build_flow_request`) and one of `FLOW_PROTOCOL_IDS` as
+// the wire protocol. `_2809` is the AES67-config variant.
+pub const OPCODE_QUERY_TX_FLOWS: u16 = 0x2200;
+pub const OPCODE_CREATE_TX_FLOW: u16 = 0x2201;
+pub const OPCODE_DELETE_TX_FLOW: u16 = 0x2202;
+pub const OPCODE_QUERY_TX_FLOWS_2809: u16 = 0x2600;
+pub const OPCODE_CREATE_TX_FLOW_2809: u16 = 0x2601;
+pub const OPCODE_DELETE_TX_FLOW_2809: u16 = 0x2602;
+
+/// Try in order to detect which flow protocol the device speaks.
+pub const FLOW_PROTOCOL_IDS: &[u16] = &[0x2729, 0x2801, 0x2809];
+
+pub const FLOW_TYPE_MULTICAST: u16 = 0x0002;
+
 pub const DEVICE_SETTINGS_INFO_SAMPLE_RATE: u16 = 0x8020;
 pub const DEVICE_SETTINGS_INFO_LATENCY: u16 = 0x8204;
 pub const DEVICE_SETTINGS_INFO_LATENCY_MIN: u16 = 0x8205;

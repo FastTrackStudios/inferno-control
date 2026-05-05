@@ -60,6 +60,34 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Multicast TX flow management.
+    Flow {
+        #[command(subcommand)]
+        op: FlowOp,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum FlowOp {
+    /// List active TX flows on the device. Auto-detects which flow
+    /// protocol id the device speaks unless `--protocol` is given.
+    List {
+        ip: String,
+        /// Force a specific flow protocol id (0x2729, 0x2801, or 0x2809).
+        /// Hex with or without 0x prefix.
+        #[arg(long, value_parser = parse_hex_u16)]
+        protocol: Option<u16>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+fn parse_hex_u16(s: &str) -> Result<u16, String> {
+    let trimmed = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    u16::from_str_radix(trimmed, 16).map_err(|e| format!("invalid hex u16 `{s}`: {e}"))
 }
 
 #[derive(Subcommand, Debug)]
@@ -88,6 +116,10 @@ enum DeviceOp {
     Reboot { ip: String },
     /// Identify (blink) device
     Identify { ip: String },
+    /// Probe whether the device is administratively locked.
+    /// Sends a privileged ARC write and inspects result_code (0x0600 =
+    /// locked, 0x0001 = unlocked, anything else = unknown).
+    LockState { ip: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -246,6 +278,11 @@ async fn main() -> Result<()> {
                 client(&ip, timeout)?.identify().await?;
                 println!("identify sent (no response expected)");
             }
+            DeviceOp::LockState { ip } => match client(&ip, timeout)?.lock_state().await? {
+                Some(true) => println!("locked"),
+                Some(false) => println!("unlocked"),
+                None => println!("unknown (unexpected result_code)"),
+            },
         },
         Cmd::Channel { op } => match op {
             ChannelOp::List { ip, json } => channel_list(ip, timeout, json).await?,
@@ -310,6 +347,9 @@ async fn main() -> Result<()> {
             }
         },
         Cmd::Diagnose { ip, port, json } => diagnose(ip, port, timeout, json, &aliases).await?,
+        Cmd::Flow { op } => match op {
+            FlowOp::List { ip, protocol, json } => flow_list(ip, protocol, timeout, json).await?,
+        },
         Cmd::Config { op } => match op {
             ConfigOp::SetSampleRate { ip, hz } => {
                 client(&ip, timeout)?.set_sample_rate(hz).await?;
@@ -799,6 +839,33 @@ async fn diagnose(
         for s in &unhealthy_subs {
             println!("  - {s}");
         }
+    }
+    Ok(())
+}
+
+async fn flow_list(ip: String, protocol: Option<u16>, timeout: Duration, json: bool) -> Result<()> {
+    let c = client(&ip, timeout)?;
+    let (protocol_id, flows) = c.query_tx_flows(protocol).await?;
+    if json {
+        let payload = serde_json::json!({
+            "flow_protocol_id": format!("0x{protocol_id:04X}"),
+            "flows": flows,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+    println!("flow protocol : 0x{protocol_id:04X}");
+    println!("active flows  : {}", flows.len());
+    for f in &flows {
+        let kind = if f.is_multicast() {
+            "multicast".to_string()
+        } else {
+            format!("0x{:04X}", f.flow_type)
+        };
+        println!(
+            "  flow #{:<3} type={:<10} sr={:<6} enc={:<3} fpp={:<3} channels={:?}",
+            f.flow_number, kind, f.sample_rate, f.encoding, f.fpp, f.channels
+        );
     }
     Ok(())
 }

@@ -235,3 +235,82 @@ pub fn parse_tx_channels(resp: &DanteResponse) -> Vec<TxChannel> {
     }
     out
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxFlow {
+    pub flow_number: u16,
+    /// Raw flow-type word; `FLOW_TYPE_MULTICAST` (0x0002) is the common case.
+    pub flow_type: u16,
+    pub sample_rate: u32,
+    pub encoding: u16,
+    /// Frames per packet.
+    pub fpp: u16,
+    /// TX channel numbers carried by this flow (multicast flows only).
+    pub channels: Vec<u16>,
+}
+
+impl TxFlow {
+    pub fn is_multicast(&self) -> bool {
+        self.flow_type == FLOW_TYPE_MULTICAST
+    }
+}
+
+/// Parse a TX-flow query response. The response header is 10 bytes; the
+/// body starts with `max_flow_slots u8, active_count u8` followed by
+/// `active_count` records of `(flow_number u16, record_pointer u16)`.
+/// Each record_pointer is an offset into the *full packet* (subtract 10
+/// for the body offset), pointing at a flow descriptor.
+///
+/// Mirrors `_parse_flow_record` in netaudio's
+/// `dante/services/arc.py:291-321`.
+pub fn parse_tx_flows(resp: &DanteResponse) -> Vec<TxFlow> {
+    let body = &resp.body;
+    if body.len() < 2 {
+        return Vec::new();
+    }
+    let active_count = body[1] as usize;
+    let mut flows = Vec::with_capacity(active_count);
+    let mut offset = 2usize;
+    for _ in 0..active_count {
+        if offset + 4 > body.len() {
+            break;
+        }
+        let flow_number = be_u16(body, offset);
+        let record_pointer = be_u16(body, offset + 2) as usize;
+        offset += 4;
+        // Pointers are relative to the whole packet; the body starts at
+        // packet offset 10.
+        let record_offset = match record_pointer.checked_sub(10) {
+            Some(v) => v,
+            None => continue,
+        };
+        if record_offset + 12 > body.len() {
+            continue;
+        }
+        let r = &body[record_offset..];
+        let flow_type = be_u16(r, 2);
+        let sample_rate = be_u32(r, 4);
+        let encoding = be_u16(r, 8);
+        let fpp = be_u16(r, 10);
+        let mut channels = Vec::new();
+        if flow_type == FLOW_TYPE_MULTICAST && r.len() >= 24 {
+            let channel_count = be_u16(r, 22) as usize;
+            for i in 0..channel_count {
+                let off = 24 + i * 2;
+                if off + 2 > r.len() {
+                    break;
+                }
+                channels.push(be_u16(r, off));
+            }
+        }
+        flows.push(TxFlow {
+            flow_number,
+            flow_type,
+            sample_rate,
+            encoding,
+            fpp,
+            channels,
+        });
+    }
+    flows
+}

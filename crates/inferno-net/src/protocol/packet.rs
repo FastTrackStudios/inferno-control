@@ -28,6 +28,27 @@ impl DantePacket {
         out
     }
 
+    /// Build a flow-control request. Header is 10 bytes (vs 8 for normal
+    /// ARC) — `[protocol_id, length, txn, opcode, 0x0000]` — and the
+    /// protocol id is one of `FLOW_PROTOCOL_IDS`, not the standard
+    /// `PROTOCOL_ID`. See `services/arc.py::_build_flow_packet` in netaudio.
+    pub fn build_flow_request(
+        protocol_id: u16,
+        opcode: u16,
+        body: &[u8],
+        transaction_id: u16,
+    ) -> Vec<u8> {
+        let length = 10u16 + body.len() as u16;
+        let mut out = Vec::with_capacity(length as usize);
+        out.extend_from_slice(&protocol_id.to_be_bytes());
+        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(&transaction_id.to_be_bytes());
+        out.extend_from_slice(&opcode.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+
     pub fn parse_response(data: &[u8]) -> Result<DanteResponse> {
         if data.len() < 10 {
             return Err(Error::Protocol(format!(

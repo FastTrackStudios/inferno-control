@@ -179,6 +179,89 @@ impl DanteClient {
         Ok(out)
     }
 
+    // ---- flow-control + lock probe (read-side) ----------------------------
+
+    /// Detect which flow-protocol id the device speaks. Tries each of
+    /// `FLOW_PROTOCOL_IDS` in turn with a 2-byte query payload; the first
+    /// one returning SUCCESS wins. Returns `None` if the device rejects
+    /// all variants (typical for AVIO endpoints with no flow capability).
+    /// Mirrors netaudio `detect_flow_protocol`.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn detect_flow_protocol(&self) -> Result<Option<u16>> {
+        for &protocol_id in FLOW_PROTOCOL_IDS {
+            let opcode = if protocol_id == 0x2809 {
+                OPCODE_QUERY_TX_FLOWS_2809
+            } else {
+                OPCODE_QUERY_TX_FLOWS
+            };
+            let txn = Self::next_txn();
+            let pkt = DantePacket::build_flow_request(protocol_id, opcode, &[0, 0], txn);
+            match self.send_arc_raw_no_check(&pkt).await {
+                Ok(resp) if resp.result_code == RESULT_CODE_SUCCESS => {
+                    return Ok(Some(protocol_id))
+                }
+                _ => continue,
+            }
+        }
+        Ok(None)
+    }
+
+    /// Query active TX flows. If `flow_protocol_id` is `None`, runs
+    /// `detect_flow_protocol` first.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn query_tx_flows(
+        &self,
+        flow_protocol_id: Option<u16>,
+    ) -> Result<(u16, Vec<parser::TxFlow>)> {
+        let protocol_id = match flow_protocol_id {
+            Some(p) => p,
+            None => self.detect_flow_protocol().await?.ok_or_else(|| {
+                Error::Protocol("device does not speak any known flow protocol".into())
+            })?,
+        };
+        let opcode = if protocol_id == 0x2809 {
+            OPCODE_QUERY_TX_FLOWS_2809
+        } else {
+            OPCODE_QUERY_TX_FLOWS
+        };
+        let txn = Self::next_txn();
+        let pkt = DantePacket::build_flow_request(protocol_id, opcode, &[0, 0], txn);
+        let resp = self.send_arc_raw(&pkt).await?;
+        Ok((protocol_id, parser::parse_tx_flows(&resp)))
+    }
+
+    /// Probe whether the device is administratively locked. Sends a
+    /// privileged write (`set_latency` to 1 s, matching netaudio's
+    /// `probe_lock_state`) and inspects `result_code`:
+    /// - `RESULT_CODE_LOCK_REJECTION` (0x0600) → locked
+    /// - `RESULT_CODE_SUCCESS`        (0x0001) → unlocked
+    /// - anything else                          → unknown.
+    ///
+    /// Note: not strictly read-only — on an unlocked device it
+    /// re-applies the 1 s latency value (typically a no-op default).
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn lock_state(&self) -> Result<Option<bool>> {
+        let pkt = commands::cmd_set_latency_us(1_000_000, Self::next_txn());
+        let resp = self.send_arc_raw_no_check(&pkt).await?;
+        match resp.result_code {
+            RESULT_CODE_LOCK_REJECTION => Ok(Some(true)),
+            RESULT_CODE_SUCCESS | RESULT_CODE_SUCCESS_EXTENDED => Ok(Some(false)),
+            _ => Ok(None),
+        }
+    }
+
+    async fn send_arc_raw_no_check(&self, packet: &[u8]) -> Result<DanteResponse> {
+        let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+        sock.connect(self.addr).await?;
+        sock.send(packet).await?;
+        let mut buf = vec![0u8; 4096];
+        let n = match timeout(self.timeout, sock.recv(&mut buf)).await {
+            Ok(r) => r?,
+            Err(_) => return Err(Error::Timeout),
+        };
+        DantePacket::parse_response(&buf[..n])
+    }
+
     // ---- write path: ARC commands -----------------------------------------
 
     fn next_txn() -> u16 {
