@@ -54,9 +54,19 @@
       in {
         # Pull the full Dioxus dev shell (Rust toolchain + GTK/WebKit/openssl/
         # tailwindcss/wasm-bindgen/etc) from FastTrackStudios/Dioxus-Flake so
-        # `inferno-control-gui` builds against the same toolchain as fts-ui.
-        devShells.default = dioxus-flake.devShells.${system}.default;
-        devShells.mobile = dioxus-flake.devShells.${system}.mobile or dioxus-flake.devShells.${system}.default;
+        # `inferno-control-gui` builds against the same toolchain as fts-ui,
+        # and layer on inferno-control-specific tools (cargo-nextest for
+        # capn's pre-push hook to actually be able to run tests).
+        devShells.default = pkgs.mkShell {
+          inputsFrom = [ dioxus-flake.devShells.${system}.default ];
+          packages = [ pkgs.cargo-nextest ];
+        };
+        devShells.mobile = pkgs.mkShell {
+          inputsFrom = [
+            (dioxus-flake.devShells.${system}.mobile or dioxus-flake.devShells.${system}.default)
+          ];
+          packages = [ pkgs.cargo-nextest ];
+        };
 
         # Hermetic build of the CLI. The GUI is not yet packaged here — it
         # depends on a sibling fts-ui checkout and on the Dioxus-Flake
