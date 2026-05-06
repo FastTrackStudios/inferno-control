@@ -160,6 +160,8 @@ enum ChannelOp {
         ip: String,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Set channel name
     SetName {
@@ -168,6 +170,8 @@ enum ChannelOp {
         direction: Direction,
         channel: u8,
         name: String,
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Reset channel name to factory default
     ResetName {
@@ -175,6 +179,8 @@ enum ChannelOp {
         #[arg(value_enum)]
         direction: Direction,
         channel: u8,
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Set channel gain
     SetGain {
@@ -193,6 +199,8 @@ enum SubscriptionOp {
         ip: String,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Add a subscription: rx_channel <- tx_channel@tx_device
     Add {
@@ -200,9 +208,18 @@ enum SubscriptionOp {
         rx_channel: u16,
         tx_channel: String,
         tx_device: String,
+        /// ARC port override (defaults to 4440; THEBATTLESHIP and other
+        /// inferno-aoip devices advertise 4410 via mDNS).
+        #[arg(long)]
+        port: Option<u16>,
     },
     /// Remove subscription on rx_channel
-    Remove { ip: String, rx_channel: u32 },
+    Remove {
+        ip: String,
+        rx_channel: u32,
+        #[arg(long)]
+        port: Option<u16>,
+    },
     /// Bulk-add subscriptions from CSV (rx_channel,tx_channel,tx_device per line).
     /// Reads from FILE, or stdin when FILE is omitted or `-`. Lines beginning
     /// with `#` and blank lines are skipped. Records are batched 16 per packet.
@@ -327,14 +344,15 @@ async fn main() -> Result<()> {
             } => device_meter(ip, name, port, timeout, json).await?,
         },
         Cmd::Channel { op } => match op {
-            ChannelOp::List { ip, json } => channel_list(ip, timeout, json).await?,
+            ChannelOp::List { ip, json, port } => channel_list(ip, port, timeout, json).await?,
             ChannelOp::SetName {
                 ip,
                 direction,
                 channel,
                 name,
+                port,
             } => {
-                client(&ip, timeout)?
+                client_with_port(&ip, port, timeout)?
                     .set_channel_name(direction.into(), channel, &name)
                     .await?;
                 println!("ok");
@@ -343,8 +361,9 @@ async fn main() -> Result<()> {
                 ip,
                 direction,
                 channel,
+                port,
             } => {
-                client(&ip, timeout)?
+                client_with_port(&ip, port, timeout)?
                     .reset_channel_name(direction.into(), channel)
                     .await?;
                 println!("ok");
@@ -362,20 +381,27 @@ async fn main() -> Result<()> {
             }
         },
         Cmd::Subscription { op } => match op {
-            SubscriptionOp::List { ip, json } => subscription_list(ip, timeout, json).await?,
+            SubscriptionOp::List { ip, json, port } => {
+                subscription_list(ip, port, timeout, json).await?
+            }
             SubscriptionOp::Add {
                 ip,
                 rx_channel,
                 tx_channel,
                 tx_device,
+                port,
             } => {
-                client(&ip, timeout)?
+                client_with_port(&ip, port, timeout)?
                     .add_subscription(rx_channel, &tx_channel, &tx_device)
                     .await?;
                 println!("ok");
             }
-            SubscriptionOp::Remove { ip, rx_channel } => {
-                client(&ip, timeout)?
+            SubscriptionOp::Remove {
+                ip,
+                rx_channel,
+                port,
+            } => {
+                client_with_port(&ip, port, timeout)?
                     .remove_subscription(rx_channel)
                     .await?;
                 println!("ok");
@@ -444,6 +470,13 @@ fn arc_addr(ip: &str) -> Result<SocketAddr> {
     format!("{}:{}", ip, DEVICE_ARC_PORT)
         .parse()
         .map_err(|e| anyhow!("invalid IP {ip}: {e}"))
+}
+
+fn client_with_port(ip: &str, port: Option<u16>, timeout: Duration) -> Result<DanteClient> {
+    let addr: SocketAddr = format!("{}:{}", ip, port.unwrap_or(DEVICE_ARC_PORT))
+        .parse()
+        .map_err(|e| anyhow!("invalid IP {ip}: {e}"))?;
+    Ok(DanteClient::new(addr, timeout))
 }
 
 fn client(ip: &str, timeout: Duration) -> Result<DanteClient> {
@@ -588,8 +621,8 @@ async fn device_info(
     Ok(())
 }
 
-async fn channel_list(ip: String, timeout: Duration, json: bool) -> Result<()> {
-    let c = client(&ip, timeout)?;
+async fn channel_list(ip: String, port: Option<u16>, timeout: Duration, json: bool) -> Result<()> {
+    let c = client_with_port(&ip, port, timeout)?;
     let tx = c.all_tx_channels().await?;
     let rx = c.all_rx_channels().await?;
 
@@ -714,8 +747,13 @@ async fn subscription_bulk_add(
     Ok(())
 }
 
-async fn subscription_list(ip: String, timeout: Duration, json: bool) -> Result<()> {
-    let c = client(&ip, timeout)?;
+async fn subscription_list(
+    ip: String,
+    port: Option<u16>,
+    timeout: Duration,
+    json: bool,
+) -> Result<()> {
+    let c = client_with_port(&ip, port, timeout)?;
     let rx = c.all_rx_channels().await?;
     let subs: Vec<_> = rx
         .into_iter()
