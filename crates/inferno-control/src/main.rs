@@ -246,6 +246,7 @@ enum ConfigOp {
     /// Set preferred leader flag
     PreferredLeader {
         ip: String,
+        #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
         #[arg(long, default_value_t = 0)]
         clock_source: u16,
