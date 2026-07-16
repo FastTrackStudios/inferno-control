@@ -47,6 +47,32 @@ pub struct RxChannel {
     pub sample_rate: Option<u32>,
 }
 
+impl RxChannel {
+    /// Whether this channel carries a working subscription. Status
+    /// codes observed in the wild: hardware Dante reports 9 (dynamic /
+    /// unicast), 10 (static / multicast) or 14 (manual) for flowing
+    /// audio; inferno-aoip reports 1 for its connected subscriptions
+    /// (the Dante spec calls 1 "unresolved" — treat it as active since
+    /// that's what a healthy Inferno device emits).
+    pub fn subscription_is_active(&self) -> bool {
+        (self.tx_channel_name.is_some() || self.tx_device_name.is_some())
+            && matches!(self.subscription_status, 1 | 9 | 10 | 14)
+    }
+}
+
+/// Human label for an ARC subscription-status code (best-effort — only
+/// codes observed on real devices are named).
+pub fn subscription_status_label(code: u16) -> &'static str {
+    match code {
+        0 => "none",
+        1 => "connected (inferno) / unresolved",
+        9 => "dynamic",
+        10 => "static",
+        14 => "manual",
+        _ => "unknown",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxChannel {
     pub number: u16,
@@ -60,6 +86,13 @@ fn be_u16(buf: &[u8], i: usize) -> u16 {
 }
 fn be_u32(buf: &[u8], i: usize) -> u32 {
     u32::from_be_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]])
+}
+
+/// Some hardware puts a non-pointer word in the sample-rate slot; the
+/// dereferenced garbage (e.g. 117509122) is filtered by plausibility.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn plausible_rate(v: &u32) -> bool {
+    (8_000..=768_000).contains(v)
 }
 
 fn string_at_pointer(body: &[u8], pointer: u16) -> String {
@@ -178,7 +211,13 @@ pub fn parse_rx_channels(resp: &DanteResponse) -> Vec<RxChannel> {
         let rx_channel_ptr = be_u16(r, 10);
         let status = be_u16(r, 12);
         let sub_status = be_u16(r, 14);
-        if channel_number == 0 {
+        // Records carry consecutive channel numbers and the string pool
+        // sits right behind them. Inferno zero-pads (the `== 0` break);
+        // hardware (Galaxy32, Apollo) does NOT — without the sequence
+        // guard the walk continues into the string pool and fabricates
+        // channels out of name bytes (a 64-ch console "grew" 189 RX).
+        let expected = out.last().map(|c: &RxChannel| c.number + 1);
+        if channel_number == 0 || expected.is_some_and(|e| channel_number != e) {
             break;
         }
         let name = string_at_pointer(b, rx_channel_ptr);
@@ -190,7 +229,7 @@ pub fn parse_rx_channels(resp: &DanteResponse) -> Vec<RxChannel> {
             let s = string_at_pointer(b, tx_device_ptr);
             (!s.is_empty()).then_some(s)
         };
-        let sample_rate = u32_at_pointer(b, sample_rate_ptr).filter(|v| *v > 0);
+        let sample_rate = u32_at_pointer(b, sample_rate_ptr).filter(plausible_rate);
         out.push(RxChannel {
             number: channel_number,
             name,
@@ -224,7 +263,7 @@ pub fn parse_tx_channels(resp: &DanteResponse) -> Vec<TxChannel> {
         if channel_number == 0 || channel_number != expected {
             break;
         }
-        let sample_rate = u32_at_pointer(b, sample_rate_ptr).filter(|v| *v > 0);
+        let sample_rate = u32_at_pointer(b, sample_rate_ptr).filter(plausible_rate);
         out.push(TxChannel {
             number: channel_number,
             name: string_at_pointer(b, name_ptr),

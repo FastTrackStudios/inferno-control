@@ -116,7 +116,15 @@ impl DanteClient {
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn rx_channels_page(&self, page: u16) -> Result<Vec<parser::RxChannel>> {
-        let starting = page * 16 + 1;
+        self.rx_channels_starting(page * 16 + 1).await
+    }
+
+    /// RX channel records starting at channel `starting` (1-based). The
+    /// device answers with as many records as it likes — inferno-aoip
+    /// sends 16, hardware sends 32 — so callers must paginate by "next
+    /// unseen channel", not by fixed page maths.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn rx_channels_starting(&self, starting: u16) -> Result<Vec<parser::RxChannel>> {
         let mut payload = Vec::with_capacity(8);
         payload.extend_from_slice(&0u16.to_be_bytes());
         payload.extend_from_slice(&1u16.to_be_bytes());
@@ -136,7 +144,13 @@ impl DanteClient {
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn tx_channels_page(&self, page: u16) -> Result<Vec<parser::TxChannel>> {
-        let starting = page * 16 + 1;
+        self.tx_channels_starting(page * 16 + 1).await
+    }
+
+    /// TX channel records starting at channel `starting` (1-based); see
+    /// [`Self::rx_channels_starting`] for the pagination contract.
+    #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
+    pub async fn tx_channels_starting(&self, starting: u16) -> Result<Vec<parser::TxChannel>> {
         let mut payload = Vec::with_capacity(8);
         payload.extend_from_slice(&0u16.to_be_bytes());
         payload.extend_from_slice(&1u16.to_be_bytes());
@@ -156,28 +170,51 @@ impl DanteClient {
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn all_rx_channels(&self) -> Result<Vec<parser::RxChannel>> {
-        let count = self.channel_count().await?;
-        let pages = count.rx_count.div_ceil(16);
-        let mut out = Vec::new();
-        for page in 0..pages {
-            let chans = self.rx_channels_page(page).await?;
-            let n = chans.len();
-            out.extend(chans);
-            if n < 16 {
+        // Ask from the next unseen channel until the advertised count
+        // is reached or a request stops making progress. Fixed
+        // 16-per-page maths double-fetched on hardware (32 records per
+        // response → every channel duplicated: Galaxy32's 64 RX came
+        // back as 189 rows before the parser guards).
+        let count = self.channel_count().await?.rx_count;
+        let mut out: Vec<parser::RxChannel> = Vec::new();
+        while (out.len() as u16) < count {
+            let starting = out.last().map(|c| c.number + 1).unwrap_or(1);
+            let before = out.len();
+            out.extend(
+                self.rx_channels_starting(starting)
+                    .await?
+                    .into_iter()
+                    .filter(|c| c.number >= starting),
+            );
+            if out.len() == before {
                 break;
             }
         }
+        out.truncate(count as usize);
         Ok(out)
     }
 
     #[instrument(level = "debug", skip(self), fields(addr = %self.addr))]
     pub async fn all_tx_channels(&self) -> Result<Vec<parser::TxChannel>> {
-        let count = self.channel_count().await?;
-        let pages = count.tx_count.div_ceil(16).max(1);
-        let mut out = Vec::new();
-        for page in (0..pages).step_by(2) {
-            out.extend(self.tx_channels_page(page).await?);
+        // Same progress-driven pagination as `all_rx_channels` (this
+        // replaces the old `step_by(2)` guess at 32-record responses,
+        // which under-fetched on 16-record inferno devices).
+        let count = self.channel_count().await?.tx_count;
+        let mut out: Vec<parser::TxChannel> = Vec::new();
+        while (out.len() as u16) < count {
+            let starting = out.last().map(|c| c.number + 1).unwrap_or(1);
+            let before = out.len();
+            out.extend(
+                self.tx_channels_starting(starting)
+                    .await?
+                    .into_iter()
+                    .filter(|c| c.number >= starting),
+            );
+            if out.len() == before {
+                break;
+            }
         }
+        out.truncate(count as usize);
         Ok(out)
     }
 

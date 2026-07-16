@@ -1,25 +1,35 @@
 [package]
 name = "inferno-control-gui"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/FastTrackStudios/inferno-control"
+authors = ["Cody Wright"]
 description = "Dioxus GUI for inferno-control — Dante Controller-style routing matrix"
+
+# Standalone workspace ON PURPOSE: fts-ui is a path dep on a sibling
+# FastTrackStudio checkout, and a member with an unresolvable path dep
+# makes the parent workspace unloadable for every git-dep consumer of
+# inferno-net. Build this crate from its own directory.
+# (The FastTrackStudio monorepo's `patchbay` app has since grown a
+# Dante routing grid on top of inferno-net — consider that the primary
+# GUI going forward.)
+[workspace]
 
 [[bin]]
 name = "inferno-control-gui"
 path = "src/main.rs"
 
 [dependencies]
-inferno-net.workspace = true
-tokio.workspace = true
-anyhow.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-dioxus = { workspace = true, features = ["desktop"] }
-dioxus-primitives.workspace = true
-lucide-dioxus.workspace = true
-fts-ui.workspace = true
-clsx.workspace = true
-tw_merge.workspace = true
+inferno-net = { path = "../inferno-net" }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = { version = "0.1", features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dioxus = { version = "0.7.6", default-features = false, features = ["lib", "desktop"] }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components", package = "dioxus-primitives", rev = "733874bb35ab8a360813d841dde8353997246f09", default-features = false }
+lucide-dioxus = { git = "https://github.com/Leaf-Computer/lucide.git", rev = "e3e509d5855324e893aef838747cccb2d115dc15", features = ["all-icons"] }
+clsx = "0.1.1"
+tw_merge = "0.1.21"
+# Sibling-checkout path (the monorepo home of fts-ui).
+fts-ui = { path = "../../../FastTrackStudio/libs/fts-ui/fts-ui" }

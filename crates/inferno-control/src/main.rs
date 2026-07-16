@@ -21,8 +21,10 @@ struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
 
-    /// Discovery / request timeout in seconds
-    #[arg(long, default_value_t = 2)]
+    /// Discovery / request timeout in seconds. Hardware Dante devices
+    /// (consoles, stageboxes) answer mDNS lazily — short windows only
+    /// find software devices; 8s reliably finds a whole studio network.
+    #[arg(long, default_value_t = 8)]
     timeout: u64,
 
     /// Optional TOML file with extra `[[alias]]` rules; overrides bundled
@@ -648,8 +650,12 @@ async fn channel_list(ip: String, port: Option<u16>, timeout: Duration, json: bo
             _ => "-".into(),
         };
         println!(
-            "  {:>3}  {:<24}  sub={}  status={:#06x}",
-            c.number, c.name, sub, c.subscription_status
+            "  {:>3}  {:<24}  sub={}  status={:#06x} ({})",
+            c.number,
+            c.name,
+            sub,
+            c.subscription_status,
+            inferno_net::protocol::parser::subscription_status_label(c.subscription_status)
         );
     }
     Ok(())
@@ -768,8 +774,12 @@ async fn subscription_list(
             let tx_dev = c.tx_device_name.as_deref().unwrap_or("-");
             let tx_ch = c.tx_channel_name.as_deref().unwrap_or("-");
             println!(
-                "{:<24} <- {}@{}   status={:#06x}",
-                c.name, tx_ch, tx_dev, c.subscription_status
+                "{:<24} <- {}@{}   status={:#06x} ({})",
+                c.name,
+                tx_ch,
+                tx_dev,
+                c.subscription_status,
+                inferno_net::protocol::parser::subscription_status_label(c.subscription_status)
             );
         }
     }
@@ -827,7 +837,7 @@ async fn diagnose(
         .iter()
         .filter(|c| {
             (c.tx_device_name.is_some() || c.tx_channel_name.is_some())
-                && c.subscription_status != 0x0001
+                && !c.subscription_is_active()
         })
         .map(|c| {
             format!(
@@ -842,7 +852,7 @@ async fn diagnose(
         .collect();
     if !unhealthy_subs.is_empty() {
         warnings.push(format!(
-            "{} subscription(s) not in healthy state (0x0001)",
+            "{} subscription(s) not in an active state (1/9/10/14)",
             unhealthy_subs.len()
         ));
     }
